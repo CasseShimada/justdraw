@@ -40,8 +40,3 @@ Example:
 ```
 python justdraw.py -path "C:\Images" "D:\Path to reference images\Gestures" -timeout 120
 ```
-
-Example for binary version: 
-```
-justdraw.exe -path "C:\Images" "D:\Path to reference images\Gestures" -timeout 120
-```
