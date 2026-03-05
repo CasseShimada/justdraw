@@ -16,14 +16,38 @@ python justdraw.py
 - Startup command-line parameters were removed.
 - If no valid image source is saved, the app opens the folder picker after startup.
 
-## 3. Image Source
+## 3. Build Windows EXE (double-click runnable)
+
+### Quick way (double-click)
+
+On Windows, double-click:
+
+`build_windows_exe.bat`
+
+After build succeeds, the executable is generated at:
+
+`dist\JustDraw.exe`
+
+### Command-line way
+
+```bash
+py -3 -m pip install --upgrade pyinstaller
+py -3 build_exe.py
+```
+
+The build script auto-detects `PyQt6` / `PyQt5` and bundles:
+
+- `main.qml`
+- `images/`
+
+## 4. Image Source
 
 - Use `File -> Set Image Folder...` to choose an image folder.
 - The folder is scanned recursively for supported image files:
   - `.jpg`, `.png`, `.bmp`, `.gif`
 - `.zip` files found in the selected folder are also included as image sources.
 
-## 4. Navigation
+## 5. Navigation
 
 - Bottom control panel keeps 4 image-switch buttons:
   - previous image
@@ -35,7 +59,7 @@ python justdraw.py
   - `PgDown`: next image
   - `Space`: pause/resume timer
 
-## 5. Image View Controls
+## 6. Image View Controls
 
 - Mouse wheel zooms the image (zoom center follows mouse position).
 - Left mouse drag pans the image.
@@ -52,7 +76,7 @@ python justdraw.py
   - rotation (multiples of 90 degrees)
 - Horizontal/vertical flip are global settings (shared across all images and remembered in config).
 
-## 6. Timer
+## 7. Timer
 
 - Click timer (top-right) to pause/resume.
 - Timer starts in paused state after launch.
@@ -74,7 +98,7 @@ Paused timer behavior:
 - Displays current numeric time (not `PAUSE`).
 - Text color is yellow and blinking.
 
-## 7. Menus
+## 8. Menus
 
 ### File menu
 
@@ -108,26 +132,26 @@ When `3-second Pre-start Countdown` is enabled:
 - `Show In File Explorer` (hidden for zip-backed images)
 - `Reset Current Image State`
 
-## 8. Clipboard and Explorer
+## 9. Clipboard and Explorer
 
 - `Ctrl+C` (window focused): copy currently visible image area in the window to clipboard.
 - `Copy Image`: same behavior as `Ctrl+C`.
 - `Copy Image Path`: copy current image file path text.
 - `Show In File Explorer`: reveal current image in system file explorer (only for non-zip images).
 
-## 9. Toast Notifications
+## 10. Toast Notifications
 
 - Actions show a semi-transparent toast message.
 - If a new action happens while toast is visible, toast text is immediately replaced with the latest action.
 
-## 10. Window Size
+## 11. Window Size
 
 - Default window size: `840x1120`.
 - Resized window size is remembered.
 
-## 11. Persistence Files
+## 12. Persistence Files
 
-### `justdraw_config.json` (project root)
+### `justdraw_config.json`
 Stores global settings:
 
 - last image source path
@@ -138,7 +162,7 @@ Stores global settings:
 - timer end mode
 - last image path
 
-### `justdraw_playback_state.json` (project root)
+### `justdraw_playback_state.json`
 Stores per-path playback data:
 
 - last image path
@@ -148,3 +172,8 @@ Stores per-path playback data:
 - per-image view states
 - global flip settings
 - recent usage timestamp
+
+When running from source (`python justdraw.py`), both files are saved in project root.
+When running packaged `exe`, both files are saved in:
+
+- Windows: `%APPDATA%\JustDraw\`

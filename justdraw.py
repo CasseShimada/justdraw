@@ -21,13 +21,22 @@ except ImportError:
 from images import ImageList
 
 print(os.getcwd())
-app_dir = os.path.dirname(os.path.realpath(__file__))
+
+
+def get_app_resource_dir():
+    if getattr(sys, 'frozen', False):
+        # PyInstaller onefile extracts bundled files to this directory.
+        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.realpath(__file__))
+
+
+app_dir = get_app_resource_dir()
 
 imgList = ImageList()
 imgList.load()
 
 app = QApplication(sys.argv)
-app.setWindowIcon(QIcon('./images/icon.png'))
+app.setWindowIcon(QIcon(os.path.join(app_dir, 'images', 'icon.png')))
 
 engine = QQmlApplicationEngine()
 engine.quit.connect(app.quit)

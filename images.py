@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import sys
 import tempfile
 import time
 
@@ -27,14 +28,40 @@ default_timer_end_mode = timer_end_mode_auto_next
 # keep created TemporaryDirectory objects here to prevent it from deletion (will be deleted after program exit)
 zip_extract_temp_paths = []
 
+
+def get_app_data_dir():
+    # Source run: keep config in project folder for local development.
+    if not getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.realpath(__file__))
+
+    app_name = 'JustDraw'
+    if sys.platform.startswith('win'):
+        base_dir = os.environ.get('APPDATA') or os.environ.get('LOCALAPPDATA')
+        if not base_dir:
+            base_dir = str(Path.home())
+        target_dir = join(base_dir, app_name)
+    else:
+        base_dir = os.environ.get('XDG_CONFIG_HOME')
+        if not base_dir:
+            base_dir = join(str(Path.home()), '.config')
+        target_dir = join(base_dir, app_name)
+
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        return target_dir
+    except OSError:
+        return os.path.dirname(sys.executable)
+
+
 class ImageList:
     def __init__(self):
         self.img_list = []
         self.cur_img_index = 0
         self.cur_image_path = ''
         self.image_root_paths = []
-        self.config_path = join(os.path.dirname(os.path.realpath(__file__)), 'justdraw_config.json')
-        self.playback_state_path = join(os.path.dirname(os.path.realpath(__file__)), playback_state_file_name)
+        self.app_data_dir = get_app_data_dir()
+        self.config_path = join(self.app_data_dir, 'justdraw_config.json')
+        self.playback_state_path = join(self.app_data_dir, playback_state_file_name)
         self.playback_states = {}
         self.random_play_mode = False
         self.stay_on_top = default_stay_on_top
