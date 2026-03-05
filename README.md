@@ -49,9 +49,8 @@ python justdraw.py
 - Image state is remembered per image path:
   - zoom scale
   - pan offsets
-  - horizontal flip
-  - vertical flip
   - rotation (multiples of 90 degrees)
+- Horizontal/vertical flip are global settings (shared across all images and remembered in config).
 
 ## 6. Timer
 
@@ -147,4 +146,5 @@ Stores per-path playback data:
 - timer seconds
 - timer end mode
 - per-image view states
+- global flip settings
 - recent usage timestamp

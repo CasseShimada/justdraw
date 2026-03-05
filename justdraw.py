@@ -45,9 +45,6 @@ class Backend(QObject):
     # set current image
     setcurimage = pyqtSignal(str, arguments=['img_path'])
 
-    # set current image flipped horizontally
-    setcurimagemirror = pyqtSignal(str, arguments=['img_path'])
-
     # set window size from command line parameters
     setwindowsize = pyqtSignal(int, int, arguments=['w, h'])
 
@@ -69,11 +66,14 @@ class Backend(QObject):
     # set paused state to drive UI style/animation
     settimerpaused = pyqtSignal(bool, arguments=['enabled'])
 
-    # restore per-image view state (scale, offsets and flip states) from persisted path state
+    # restore per-image view state (scale, offsets and rotation) from persisted path state
     setimageviewstate = pyqtSignal(
-        float, float, float, bool, bool, int, bool,
-        arguments=['scale, offset_x, offset_y, flip_horizontal, flip_vertical, rotation, has_state']
+        float, float, float, int, bool,
+        arguments=['scale, offset_x, offset_y, rotation, has_state']
     )
+
+    # restore global flip settings from config
+    setglobalflipstate = pyqtSignal(bool, bool, arguments=['flip_horizontal, flip_vertical'])
 
     # whether current image can be revealed in file explorer (hidden for zip-backed images)
     setcanrevealinexplorer = pyqtSignal(bool, arguments=['enabled'])
@@ -151,18 +151,20 @@ class Backend(QObject):
         view_state = imgList.getCurrentImageViewState()
         self.setcanrevealinexplorer.emit(imgList.canRevealCurrentImageInExplorer())
         if not view_state:
-            self.setimageviewstate.emit(1.0, 0.0, 0.0, False, False, 0, False)
+            self.setimageviewstate.emit(1.0, 0.0, 0.0, 0, False)
             return
 
         self.setimageviewstate.emit(
             float(view_state.get('scale', 1.0)),
             float(view_state.get('offset_x', 0.0)),
             float(view_state.get('offset_y', 0.0)),
-            bool(view_state.get('mirror', False)),
-            bool(view_state.get('flip_vertical', False)),
             int(view_state.get('rotation', 0)),
             True
         )
+
+    def emit_global_flip_state(self):
+        global imgList
+        self.setglobalflipstate.emit(imgList.getGlobalFlipHorizontal(), imgList.getGlobalFlipVertical())
 
     def set_cur_timer(self):
         global imgList
@@ -311,13 +313,10 @@ class Backend(QObject):
         global imgList
         return imgList.getRecentPlaybackPaths(10)
 
-    def reload(self, mirror=False):
+    def reload(self):
         global imgList
 
-        if mirror:
-            self.setcurimagemirror.emit(QUrl.fromLocalFile(imgList.getImagePath()).toString())
-        else:
-            self.setcurimage.emit(QUrl.fromLocalFile(imgList.getImagePath()).toString())
+        self.setcurimage.emit(QUrl.fromLocalFile(imgList.getImagePath()).toString())
         self.emit_image_view_state()
 
     @pyqtSlot()
@@ -480,10 +479,18 @@ class Backend(QObject):
             self.reload()
         self.emit_timer_visual_state()
 
-    @pyqtSlot(str, str, str, str, str, str, result=bool)
-    def save_image_view_state(self, scale, offset_x, offset_y, flip_horizontal, flip_vertical, rotation):
+    @pyqtSlot(str, str, str, str, result=bool)
+    def save_image_view_state(self, scale, offset_x, offset_y, rotation):
         global imgList
-        return imgList.saveCurrentImageViewState(scale, offset_x, offset_y, flip_horizontal, flip_vertical, rotation)
+        return imgList.saveCurrentImageViewState(scale, offset_x, offset_y, rotation)
+
+    @pyqtSlot(str, str, result=bool)
+    def save_global_flip_state(self, flip_horizontal, flip_vertical):
+        global imgList
+        changed = imgList.setGlobalFlipState(flip_horizontal, flip_vertical)
+        if changed:
+            self.emit_global_flip_state()
+        return True
 
     @pyqtSlot(result=bool)
     def delete_path_playback_state(self):
@@ -511,10 +518,6 @@ class Backend(QObject):
 
         print('Deleted path playback state: {0}'.format(selected_path))
         return True
-
-    @pyqtSlot()
-    def mirror(self):
-        self.reload(mirror=True)
 
     @pyqtSlot(result=bool)
     def copy(self):
@@ -577,6 +580,7 @@ backend.timer_value()
 backend.stay_on_top()
 backend.timer_end_mode()
 backend.prestart_countdown_enabled()
+backend.emit_global_flip_state()
 
 if imgList.hasImages():
     backend.initialize_current_image()

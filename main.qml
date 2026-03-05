@@ -81,9 +81,18 @@ ApplicationWindow {
 			String(imageViewport.imageScale),
 			String(imageViewport.imageOffsetX),
 			String(imageViewport.imageOffsetY),
-			String(curImgMirror),
-			String(curImgFlipVertical),
 			String(curImgRotation)
+		);
+	}
+
+	function saveGlobalFlipStateNow() {
+		if (!backend) {
+			return;
+		}
+
+		backend.save_global_flip_state(
+			String(curImgMirror),
+			String(curImgFlipVertical)
 		);
 	}
 
@@ -158,8 +167,6 @@ ApplicationWindow {
 		}
 
 		// Reset current runtime view immediately, then synchronize persistence.
-		curImgMirror = false;
-		curImgFlipVertical = false;
 		curImgRotation = 0;
 		imageViewport.resetView();
 		backend.reset_current_image_state();
@@ -211,13 +218,13 @@ ApplicationWindow {
 
 	function flipHorizontalAction() {
 		curImgMirror = !curImgMirror;
-		persistImageViewStateTimer.restart();
+		saveGlobalFlipStateNow();
 		showActionToast(curImgMirror ? "Horizontal flip enabled" : "Horizontal flip disabled");
 	}
 
 	function flipVerticalAction() {
 		curImgFlipVertical = !curImgFlipVertical;
-		persistImageViewStateTimer.restart();
+		saveGlobalFlipStateNow();
 		showActionToast(curImgFlipVertical ? "Vertical flip enabled" : "Vertical flip disabled");
 	}
 
@@ -510,15 +517,13 @@ ApplicationWindow {
 
 			function onSetcurimage(msg) {
 				curImagePath = msg;
-				curImgMirror = false;
-				curImgFlipVertical = false;
 				curImgRotation = 0;
 				imageViewport.resetView();
 			}
 
-		function onSetcurimagemirror(msg) {
-			curImagePath = msg;
-			curImgMirror = !curImgMirror;
+		function onSetglobalflipstate(flip_horizontal, flip_vertical) {
+			curImgMirror = flip_horizontal;
+			curImgFlipVertical = flip_vertical;
 		}
 
 		function onSetwindowsize(w, h) {
@@ -573,12 +578,10 @@ ApplicationWindow {
 			prestartCountdownActive = active;
 		}
 
-				function onSetimageviewstate(scale, offset_x, offset_y, flip_horizontal, flip_vertical, rotation, has_state) {
+				function onSetimageviewstate(scale, offset_x, offset_y, rotation, has_state) {
 					imageViewport.pendingScale = scale;
 					imageViewport.pendingOffsetX = offset_x;
 					imageViewport.pendingOffsetY = offset_y;
-					imageViewport.pendingFlipHorizontal = flip_horizontal;
-					imageViewport.pendingFlipVertical = flip_vertical;
 					imageViewport.pendingRotation = rotation;
 					imageViewport.pendingHasState = has_state;
 					imageViewport.applyPendingViewState();
@@ -704,11 +707,9 @@ ApplicationWindow {
 			property real imageOffsetY: 0
 			property real dragLastX: 0
 			property real dragLastY: 0
-			property real pendingScale: 1.0
-			property real pendingOffsetX: 0
-			property real pendingOffsetY: 0
-				property bool pendingFlipHorizontal: false
-				property bool pendingFlipVertical: false
+				property real pendingScale: 1.0
+				property real pendingOffsetX: 0
+				property real pendingOffsetY: 0
 				property int pendingRotation: 0
 				property bool pendingHasState: false
 
@@ -751,29 +752,25 @@ ApplicationWindow {
 				applyImageGeometry();
 			}
 
-			function applyPendingViewState() {
-				if (img.status !== Image.Ready) {
-					return;
-				}
+				function applyPendingViewState() {
+					if (img.status !== Image.Ready) {
+						return;
+					}
 
-				if (pendingHasState) {
-					imageScale = Math.max(minImageScale, Math.min(maxImageScale, pendingScale));
+					if (pendingHasState) {
+						imageScale = Math.max(minImageScale, Math.min(maxImageScale, pendingScale));
 						imageOffsetX = pendingOffsetX;
 						imageOffsetY = pendingOffsetY;
-						curImgMirror = pendingFlipHorizontal;
-						curImgFlipVertical = pendingFlipVertical;
 						curImgRotation = normalizeRightAngle(pendingRotation);
 					} else {
 						imageScale = 1.0;
 						imageOffsetX = 0;
 						imageOffsetY = 0;
-						curImgMirror = false;
-						curImgFlipVertical = false;
 						curImgRotation = 0;
 					}
 
-				applyImageGeometry();
-			}
+					applyImageGeometry();
+				}
 
 			function zoomAt(mouseX, mouseY, deltaY) {
 				if (deltaY === 0) {

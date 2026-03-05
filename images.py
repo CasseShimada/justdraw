@@ -41,6 +41,8 @@ class ImageList:
         self.timer_end_mode = default_timer_end_mode
         self.prestart_countdown_enabled = False
         self.last_image_path = ''
+        self.global_flip_horizontal = False
+        self.global_flip_vertical = False
 
         self.timer_paused = False
         self.max_timer_value = default_timer_seconds
@@ -182,6 +184,14 @@ class ImageList:
         self.timer_end_mode = mode
         self.prestart_countdown_enabled = self._to_bool(data.get('prestart_countdown_enabled', False), False)
         self.last_image_path = str(data.get('last_image_path', '')).strip()
+        self.global_flip_horizontal = self._to_bool(
+            data.get('global_flip_horizontal', data.get('flip_horizontal', False)),
+            False
+        )
+        self.global_flip_vertical = self._to_bool(
+            data.get('global_flip_vertical', data.get('flip_vertical', False)),
+            False
+        )
 
     def saveConfig(self):
         data = {
@@ -196,6 +206,8 @@ class ImageList:
             # Keep legacy key for backward compatibility.
             'auto_next_on_timer_end': self.timer_end_mode == timer_end_mode_auto_next,
             'last_image_path': self.last_image_path,
+            'global_flip_horizontal': self.global_flip_horizontal,
+            'global_flip_vertical': self.global_flip_vertical,
         }
 
         try:
@@ -223,6 +235,30 @@ class ImageList:
         paths = data.get('paths', {}) if isinstance(data, dict) else {}
         if isinstance(paths, dict):
             self.playback_states = paths
+            if self._remove_legacy_flip_fields_from_view_states():
+                self.savePlaybackState()
+
+    def _remove_legacy_flip_fields_from_view_states(self):
+        changed = False
+        for state in self.playback_states.values():
+            if not isinstance(state, dict):
+                continue
+
+            view_states = state.get('image_view_states')
+            if not isinstance(view_states, dict):
+                continue
+
+            for view in view_states.values():
+                if not isinstance(view, dict):
+                    continue
+                if 'mirror' in view:
+                    del view['mirror']
+                    changed = True
+                if 'flip_vertical' in view:
+                    del view['flip_vertical']
+                    changed = True
+
+        return changed
 
     def savePlaybackState(self):
         data = {
@@ -354,7 +390,7 @@ class ImageList:
         self.savePlaybackState()
         return True
 
-    def saveCurrentImageViewState(self, scale, offset_x, offset_y, mirror=False, flip_vertical=False, rotation=0):
+    def saveCurrentImageViewState(self, scale, offset_x, offset_y, rotation=0):
         if not self.getImageRootPath() or not self.cur_image_path:
             return False
 
@@ -365,8 +401,6 @@ class ImageList:
         except (TypeError, ValueError):
             return False
 
-        mirror_value = self._to_bool(mirror, False)
-        flip_vertical_value = self._to_bool(flip_vertical, False)
         rotation_value = self._normalize_rotation(rotation)
 
         state = self._ensure_current_path_playback_state()
@@ -379,8 +413,6 @@ class ImageList:
             'scale': scale_value,
             'offset_x': offset_x_value,
             'offset_y': offset_y_value,
-            'mirror': mirror_value,
-            'flip_vertical': flip_vertical_value,
             'rotation': rotation_value,
         }
 
@@ -412,18 +444,32 @@ class ImageList:
         except (TypeError, ValueError):
             return None
 
-        mirror_value = self._to_bool(view.get('mirror', False), False)
-        flip_vertical_value = self._to_bool(view.get('flip_vertical', False), False)
         rotation_value = self._normalize_rotation(view.get('rotation', 0))
 
         return {
             'scale': scale_value,
             'offset_x': offset_x_value,
             'offset_y': offset_y_value,
-            'mirror': mirror_value,
-            'flip_vertical': flip_vertical_value,
             'rotation': rotation_value,
         }
+
+    def getGlobalFlipHorizontal(self):
+        return self.global_flip_horizontal
+
+    def getGlobalFlipVertical(self):
+        return self.global_flip_vertical
+
+    def setGlobalFlipState(self, flip_horizontal, flip_vertical):
+        new_horizontal = self._to_bool(flip_horizontal, False)
+        new_vertical = self._to_bool(flip_vertical, False)
+
+        if self.global_flip_horizontal == new_horizontal and self.global_flip_vertical == new_vertical:
+            return False
+
+        self.global_flip_horizontal = new_horizontal
+        self.global_flip_vertical = new_vertical
+        self.saveConfig()
+        return True
 
     def isCurrentImageFromZip(self):
         if not self.hasImages() or not self.cur_image_path:
