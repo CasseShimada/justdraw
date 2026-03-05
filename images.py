@@ -1,17 +1,28 @@
-import argparse
+import json
 import os
 import random
-import sys
 import tempfile
+import time
 
 from os import walk
-from os.path import join, exists, basename, splitext
+from os.path import join, exists, basename, splitext, isdir, isfile, dirname
 from zipfile import ZipFile
 from pathlib import Path
 
 # supported file extensions
 image_extensions = ['.jpg', '.png', '.bmp', '.gif']
 zip_extensions = ['.zip']
+default_window_width = 840
+default_window_height = 1120
+default_timer_seconds = 90
+default_stay_on_top = True
+playback_state_file_name = 'justdraw_playback_state.json'
+
+timer_end_mode_auto_next = 'auto_next'
+timer_end_mode_hold = 'hold'
+timer_end_mode_overtime = 'overtime'
+timer_end_modes = (timer_end_mode_auto_next, timer_end_mode_hold, timer_end_mode_overtime)
+default_timer_end_mode = timer_end_mode_auto_next
 
 # keep created TemporaryDirectory objects here to prevent it from deletion (will be deleted after program exit)
 zip_extract_temp_paths = []
@@ -21,14 +32,77 @@ class ImageList:
         self.img_list = []
         self.cur_img_index = 0
         self.cur_image_path = ''
+        self.image_root_paths = []
+        self.config_path = join(os.path.dirname(os.path.realpath(__file__)), 'justdraw_config.json')
+        self.playback_state_path = join(os.path.dirname(os.path.realpath(__file__)), playback_state_file_name)
+        self.playback_states = {}
+        self.random_play_mode = False
+        self.stay_on_top = default_stay_on_top
+        self.timer_end_mode = default_timer_end_mode
+        self.prestart_countdown_enabled = False
+        self.last_image_path = ''
 
         self.timer_paused = False
-        self.max_timer_value = 60
+        self.max_timer_value = default_timer_seconds
         self.cur_timer = 0
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
         self.total_time_spent = 0
 
-        self.window_width = 0
-        self.window_height = 0
+        self.window_width = default_window_width
+        self.window_height = default_window_height
+
+        self.loadConfig()
+        self.loadPlaybackState()
+
+    @staticmethod
+    def _to_bool(value, default):
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)):
+            return value != 0
+
+        if isinstance(value, str):
+            lower = value.strip().lower()
+            if lower in ('1', 'true', 'yes', 'on'):
+                return True
+            if lower in ('0', 'false', 'no', 'off'):
+                return False
+
+        return default
+
+    @staticmethod
+    def _path_key(path):
+        # Normalize separators/case so resume matching works across slash styles.
+        raw = str(path).strip()
+        if raw == '':
+            return ''
+        normalized = raw.replace('\\', os.sep).replace('/', os.sep)
+        return os.path.normcase(os.path.normpath(normalized))
+
+    @staticmethod
+    def _normalize_timer_end_mode(raw_value):
+        value = str(raw_value).strip().lower()
+        if value in timer_end_modes:
+            return value
+        return ''
+
+    @staticmethod
+    def _normalize_rotation(raw_value):
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return 0
+
+        value = value % 360
+        if value < 0:
+            value += 360
+
+        if value % 90 != 0:
+            return 0
+
+        return value
 
     def getImagePath(self):
         return self.cur_image_path
@@ -38,6 +112,527 @@ class ImageList:
 
     def getWindowHeight(self):
         return self.window_height
+
+    def getImageRootPath(self):
+        if len(self.image_root_paths) == 0:
+            return ''
+
+        return self.image_root_paths[0]
+
+    def hasImages(self):
+        return len(self.img_list) > 0
+
+    def loadConfig(self):
+        if not exists(self.config_path):
+            return
+
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as fp:
+                raw = fp.read().strip()
+
+            if raw == '':
+                return
+
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return
+
+        path = str(data.get('image_root_path', '')).strip()
+        if path and exists(path) and (isdir(path) or (isfile(path) and is_file_valid(path, zip_extensions))):
+            self.image_root_paths = [path]
+        else:
+            self.image_root_paths = []
+
+        try:
+            width = int(data.get('window_width', default_window_width))
+            height = int(data.get('window_height', default_window_height))
+        except (TypeError, ValueError):
+            width = default_window_width
+            height = default_window_height
+
+        if width > 0:
+            self.window_width = width
+        else:
+            self.window_width = default_window_width
+
+        if height > 0:
+            self.window_height = height
+        else:
+            self.window_height = default_window_height
+
+        try:
+            timer_seconds = int(data.get('timer_seconds', default_timer_seconds))
+        except (TypeError, ValueError):
+            timer_seconds = default_timer_seconds
+
+        if timer_seconds > 0:
+            self.max_timer_value = timer_seconds
+        else:
+            self.max_timer_value = default_timer_seconds
+
+        # Keep startup behavior: first timer tick should trigger initial image load.
+        self.cur_timer = 0
+        self.random_play_mode = self._to_bool(data.get('random_play_mode', False), False)
+        self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
+        mode = self._normalize_timer_end_mode(data.get('timer_end_mode', ''))
+        if mode == '':
+            # Backward compatibility for older config shape.
+            auto_next = self._to_bool(data.get('auto_next_on_timer_end', True), True)
+            mode = timer_end_mode_auto_next if auto_next else timer_end_mode_hold
+        self.timer_end_mode = mode
+        self.prestart_countdown_enabled = self._to_bool(data.get('prestart_countdown_enabled', False), False)
+        self.last_image_path = str(data.get('last_image_path', '')).strip()
+
+    def saveConfig(self):
+        data = {
+            'image_root_path': self.getImageRootPath(),
+            'window_width': self.window_width,
+            'window_height': self.window_height,
+            'timer_seconds': self.max_timer_value,
+            'random_play_mode': self.random_play_mode,
+            'stay_on_top': self.stay_on_top,
+            'timer_end_mode': self.timer_end_mode,
+            'prestart_countdown_enabled': self.prestart_countdown_enabled,
+            # Keep legacy key for backward compatibility.
+            'auto_next_on_timer_end': self.timer_end_mode == timer_end_mode_auto_next,
+            'last_image_path': self.last_image_path,
+        }
+
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as fp:
+                json.dump(data, fp, ensure_ascii=True, indent=2)
+        except OSError:
+            print('Cannot write config file: {0}'.format(self.config_path))
+
+    def loadPlaybackState(self):
+        self.playback_states = {}
+        if not exists(self.playback_state_path):
+            return
+
+        try:
+            with open(self.playback_state_path, 'r', encoding='utf-8') as fp:
+                raw = fp.read().strip()
+
+            if raw == '':
+                return
+
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return
+
+        paths = data.get('paths', {}) if isinstance(data, dict) else {}
+        if isinstance(paths, dict):
+            self.playback_states = paths
+
+    def savePlaybackState(self):
+        data = {
+            'paths': self.playback_states,
+        }
+
+        try:
+            with open(self.playback_state_path, 'w', encoding='utf-8') as fp:
+                json.dump(data, fp, ensure_ascii=True, indent=2)
+        except OSError:
+            print('Cannot write playback state file: {0}'.format(self.playback_state_path))
+
+    def _get_path_playback_key(self, path=''):
+        target_path = path if path else self.getImageRootPath()
+        if not target_path:
+            return ''
+        return self._path_key(target_path)
+
+    def _ensure_current_path_playback_state(self):
+        key = self._get_path_playback_key()
+        if key == '':
+            return None
+
+        state = self.playback_states.get(key)
+        if not isinstance(state, dict):
+            state = {}
+            self.playback_states[key] = state
+
+        state['path'] = self.getImageRootPath()
+        if ('image_view_states' not in state) or (not isinstance(state.get('image_view_states'), dict)):
+            state['image_view_states'] = {}
+
+        return state
+
+    def _capture_current_path_playback_state(self, save_to_disk=False):
+        state = self._ensure_current_path_playback_state()
+        if state is None:
+            return False
+
+        state['last_image_path'] = self.cur_image_path if self.cur_image_path else self.last_image_path
+        state['random_play_mode'] = self.random_play_mode
+        state['timer_seconds'] = self.max_timer_value
+        state['timer_end_mode'] = self.timer_end_mode
+        state['auto_next_on_timer_end'] = self.timer_end_mode == timer_end_mode_auto_next
+        state['last_used_at'] = int(time.time())
+
+        if save_to_disk:
+            self.savePlaybackState()
+
+        return True
+
+    def applyPlaybackStateForCurrentPath(self):
+        key = self._get_path_playback_key()
+        if key == '':
+            return
+
+        state = self.playback_states.get(key)
+        if not isinstance(state, dict):
+            return
+
+        self.last_image_path = str(state.get('last_image_path', self.last_image_path)).strip()
+        self.random_play_mode = self._to_bool(state.get('random_play_mode', self.random_play_mode), self.random_play_mode)
+        mode = self._normalize_timer_end_mode(state.get('timer_end_mode', ''))
+        if mode == '':
+            auto_next = self._to_bool(
+                state.get('auto_next_on_timer_end', self.timer_end_mode == timer_end_mode_auto_next),
+                self.timer_end_mode == timer_end_mode_auto_next
+            )
+            mode = timer_end_mode_auto_next if auto_next else timer_end_mode_hold
+        self.timer_end_mode = mode
+
+        try:
+            timer_seconds = int(state.get('timer_seconds', self.max_timer_value))
+            if timer_seconds > 0:
+                self.max_timer_value = timer_seconds
+        except (TypeError, ValueError):
+            pass
+
+    def getSavedPlaybackPaths(self):
+        result = []
+        for state in self.playback_states.values():
+            if not isinstance(state, dict):
+                continue
+
+            path = str(state.get('path', '')).strip()
+            if path:
+                result.append(path)
+
+        # Keep ordering stable for UI chooser.
+        return sorted(set(result))
+
+    def getRecentPlaybackPaths(self, limit_count=10):
+        ranked = []
+        for state in self.playback_states.values():
+            if not isinstance(state, dict):
+                continue
+
+            path = str(state.get('path', '')).strip()
+            if not path:
+                continue
+
+            try:
+                last_used_at = int(state.get('last_used_at', 0))
+            except (TypeError, ValueError):
+                last_used_at = 0
+
+            ranked.append((last_used_at, path))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+
+        unique_paths = []
+        seen = set()
+        for _, path in ranked:
+            if path in seen:
+                continue
+            seen.add(path)
+            unique_paths.append(path)
+            if len(unique_paths) >= limit_count:
+                break
+
+        return unique_paths
+
+    def deletePlaybackState(self, path):
+        key = self._get_path_playback_key(path)
+        if key == '' or key not in self.playback_states:
+            return False
+
+        del self.playback_states[key]
+        self.savePlaybackState()
+        return True
+
+    def saveCurrentImageViewState(self, scale, offset_x, offset_y, mirror=False, flip_vertical=False, rotation=0):
+        if not self.getImageRootPath() or not self.cur_image_path:
+            return False
+
+        try:
+            scale_value = float(scale)
+            offset_x_value = float(offset_x)
+            offset_y_value = float(offset_y)
+        except (TypeError, ValueError):
+            return False
+
+        mirror_value = self._to_bool(mirror, False)
+        flip_vertical_value = self._to_bool(flip_vertical, False)
+        rotation_value = self._normalize_rotation(rotation)
+
+        state = self._ensure_current_path_playback_state()
+        if state is None:
+            return False
+
+        view_states = state['image_view_states']
+        view_states[self._path_key(self.cur_image_path)] = {
+            'image_path': self.cur_image_path,
+            'scale': scale_value,
+            'offset_x': offset_x_value,
+            'offset_y': offset_y_value,
+            'mirror': mirror_value,
+            'flip_vertical': flip_vertical_value,
+            'rotation': rotation_value,
+        }
+
+        self._capture_current_path_playback_state(save_to_disk=False)
+        self.savePlaybackState()
+        return True
+
+    def getCurrentImageViewState(self):
+        if not self.getImageRootPath() or not self.cur_image_path:
+            return None
+
+        key = self._get_path_playback_key()
+        state = self.playback_states.get(key)
+        if not isinstance(state, dict):
+            return None
+
+        view_states = state.get('image_view_states', {})
+        if not isinstance(view_states, dict):
+            return None
+
+        view = view_states.get(self._path_key(self.cur_image_path))
+        if not isinstance(view, dict):
+            return None
+
+        try:
+            scale_value = float(view.get('scale', 1.0))
+            offset_x_value = float(view.get('offset_x', 0.0))
+            offset_y_value = float(view.get('offset_y', 0.0))
+        except (TypeError, ValueError):
+            return None
+
+        mirror_value = self._to_bool(view.get('mirror', False), False)
+        flip_vertical_value = self._to_bool(view.get('flip_vertical', False), False)
+        rotation_value = self._normalize_rotation(view.get('rotation', 0))
+
+        return {
+            'scale': scale_value,
+            'offset_x': offset_x_value,
+            'offset_y': offset_y_value,
+            'mirror': mirror_value,
+            'flip_vertical': flip_vertical_value,
+            'rotation': rotation_value,
+        }
+
+    def isCurrentImageFromZip(self):
+        if not self.hasImages() or not self.cur_image_path:
+            return False
+
+        if self.cur_img_index >= 0 and self.cur_img_index < len(self.img_list):
+            if isinstance(self.img_list[self.cur_img_index], ImagePathInZip):
+                return True
+
+        # Images extracted from zip-file mode are regular paths inside temporary zip extract folders.
+        cur_path = os.path.normcase(os.path.normpath(self.cur_image_path))
+        for temp_dir in zip_extract_temp_paths:
+            try:
+                base_dir = os.path.normcase(os.path.normpath(temp_dir.name))
+            except Exception:
+                continue
+
+            if cur_path == base_dir or cur_path.startswith(base_dir + os.sep):
+                return True
+
+        return False
+
+    def canRevealCurrentImageInExplorer(self):
+        return self.hasImages() and bool(self.cur_image_path) and (not self.isCurrentImageFromZip())
+
+    def clearCurrentImageViewState(self):
+        if not self.getImageRootPath() or not self.cur_image_path:
+            return False
+
+        key = self._get_path_playback_key()
+        state = self.playback_states.get(key)
+        if not isinstance(state, dict):
+            return False
+
+        view_states = state.get('image_view_states', {})
+        if not isinstance(view_states, dict):
+            return False
+
+        img_key = self._path_key(self.cur_image_path)
+        if img_key not in view_states:
+            return False
+
+        del view_states[img_key]
+        self._capture_current_path_playback_state(save_to_disk=False)
+        self.savePlaybackState()
+        return True
+
+    def clearCurrentPathImageViewStates(self):
+        if not self.getImageRootPath():
+            return False
+
+        state = self._ensure_current_path_playback_state()
+        if state is None:
+            return False
+
+        view_states = state.get('image_view_states')
+        if not isinstance(view_states, dict) or len(view_states) == 0:
+            return False
+
+        state['image_view_states'] = {}
+        self._capture_current_path_playback_state(save_to_disk=False)
+        self.savePlaybackState()
+        return True
+
+    def _buildImageListFromFolder(self, path):
+        # Load regular images from the folder tree and include ZIP archives as image sources too.
+        img_items = toImgList(self, findAllSupportedFiles([path], image_extensions))
+        zip_files = findAllSupportedFiles([path], zip_extensions)
+        if len(zip_files) > 0:
+            img_items.extend(findAllSupportedZipFilesRandom(self, zip_files))
+        return img_items
+
+    def _buildImageListFromSourcePath(self, path):
+        source_path = str(path).strip()
+        if not source_path or not exists(source_path):
+            return []
+
+        if isdir(source_path):
+            return self._buildImageListFromFolder(source_path)
+
+        if isfile(source_path) and is_file_valid(source_path, zip_extensions):
+            return findAllSupportedZipFilesRandom(self, [source_path])
+
+        return []
+
+    def _switchToImageList(self, new_img_list, source_path=''):
+        if len(new_img_list) == 0:
+            return False
+
+        # Save current path progress before switching to a new source.
+        self.saveResumeState()
+
+        was_paused = self.timer_paused
+        self.image_root_paths = [source_path] if source_path else []
+        self.img_list = new_img_list
+        self.last_image_path = ''
+        self.applyPlaybackStateForCurrentPath()
+
+        if self.random_play_mode:
+            self.shuffle_cycle()
+
+        self.cur_img_index = -1
+        self.cur_image_path = ''
+        self.cur_timer = 0
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
+        self.restoreLastImagePosition()
+        self.change(1)
+
+        if was_paused and not self.timer_paused:
+            self.pause()
+
+        self.saveConfig()
+        self._capture_current_path_playback_state(save_to_disk=True)
+        return True
+
+    def setImageRootPath(self, path):
+        path = str(path).strip()
+        if not path:
+            return False
+
+        new_img_list = self._buildImageListFromSourcePath(path)
+        if len(new_img_list) == 0:
+            return False
+
+        return self._switchToImageList(new_img_list, path)
+
+    def setZipFiles(self, zip_file_paths):
+        valid_zip_files = []
+        for item in zip_file_paths:
+            zip_file = str(item).strip()
+            if zip_file and exists(zip_file) and isfile(zip_file) and is_file_valid(zip_file, zip_extensions):
+                valid_zip_files.append(zip_file)
+
+        if len(valid_zip_files) == 0:
+            return False
+
+        source_path = ''
+        if len(valid_zip_files) == 1:
+            source_path = valid_zip_files[0]
+        else:
+            parent_folders = sorted(set(dirname(path) for path in valid_zip_files))
+            if len(parent_folders) == 1:
+                source_path = parent_folders[0]
+
+        return self._switchToImageList(findAllSupportedZipFiles(self, valid_zip_files), source_path)
+
+    def setRandomZipFromFolder(self, folder_path):
+        path = str(folder_path).strip()
+        if not path or not exists(path) or not isdir(path):
+            return False
+
+        zip_files_list = findAllSupportedFiles([path], zip_extensions)
+        if len(zip_files_list) == 0:
+            return False
+
+        selected_zip = random.choice(zip_files_list)
+        return self._switchToImageList(findAllSupportedZipFiles(self, [selected_zip]), path)
+
+    def setAllZipsFromFolder(self, folder_path):
+        path = str(folder_path).strip()
+        if not path or not exists(path) or not isdir(path):
+            return False
+
+        zip_files_list = findAllSupportedFiles([path], zip_extensions)
+        if len(zip_files_list) == 0:
+            return False
+
+        return self._switchToImageList(findAllSupportedZipFilesRandom(self, zip_files_list), path)
+
+    def setDefaultWindowSize(self, width, height):
+        if width <= 0 or height <= 0:
+            return False
+
+        self.window_width = width
+        self.window_height = height
+        self.saveConfig()
+        return True
+
+    def restoreLastImagePosition(self):
+        if len(self.img_list) == 0:
+            return False
+
+        if not self.getImageRootPath():
+            return False
+
+        if not self.last_image_path:
+            return False
+
+        target_key = self._path_key(self.last_image_path)
+        for index, item in enumerate(self.img_list):
+            if self._path_key(item.get_path()) == target_key:
+                # Startup image is produced by change(1), so offset by one step.
+                self.cur_img_index = index - 1
+                self.cur_image_path = ''
+                self.cur_timer = 0
+                return True
+
+        # Image was removed or moved since last run.
+        self.last_image_path = ''
+        self.saveConfig()
+        self._capture_current_path_playback_state(save_to_disk=True)
+        return False
+
+    def saveResumeState(self):
+        if self.getImageRootPath() and self.cur_image_path:
+            self.last_image_path = self.cur_image_path
+        self._capture_current_path_playback_state(save_to_disk=True)
+        self.saveConfig()
 
     def getIndexOfPrevImageInSameFolder(self):
 
@@ -68,94 +663,34 @@ class ImageList:
         return self.cur_img_index + 1
 
     def load(self):
-        # command line arguments
-        parser = argparse.ArgumentParser(description='Gesture drawing helper for artists.')
-
-        parser.add_argument('-path', metavar='path', default='', nargs='+',
-                            help='Paths to the images directory (current directory by default). You can specify many '
-                                 'directories')
-
-        parser.add_argument('-zip-path', metavar='zip_path', default='',
-                            help='Path to the directory with zip files contains images. The one random zip file selected,'
-                                 ' then all it images will be shown in random order')
-
-        parser.add_argument('-zip-path-random', metavar='zip_path_random', default='',
-                            help='Path to the directory with zip files contains images. All zip files selected,'
-                                 ' then all images from all these files will be shown in random order')
-
-        parser.add_argument('-zip-file', metavar='zip_file', default='', nargs='+',
-                            help='Zip files with images. You can specify many files.')
-
-        parser.add_argument('-timeout', dest='timeout', type=int, default=60,
-                            help='Timeout in seconds (60 by default)')
-
-        parser.add_argument('-width', dest='width', type=int, default=600,
-                            help='Window width in pixels (600 by default)')
-
-        parser.add_argument('-height', dest='height', type=int, default=800,
-                            help='Window height in pixels (800 by default)')
-
-        args = parser.parse_args()
-        print(args)
-
-        if args.zip_file:
-
-            # extract the zip files to temp directories and return list of images inside them
-            self.img_list = findAllSupportedZipFiles(self, args.zip_file)
-
-        elif args.zip_path:
-
-            if not args.zip_path or not exists(args.zip_path):
-                print('Directory {} not found'.format(args.zip_path))
-                sys.exit(-1)
-
-            # if zip-path defined - use it to find archives
-            zip_files_list = findAllSupportedFiles([args.zip_path], zip_extensions)
-
-            if len(zip_files_list) == 0:
-                print('No supported archives found in directory {}'.format(args.zip_path))
-                sys.exit(-1)
-
-            # now peek one random archive file and extract it to the temp directory
-            self.img_list = findAllSupportedZipFiles(self, [random.choice(zip_files_list)])
-
-        elif args.zip_path_random:
-
-            if not args.zip_path_random or not exists(args.zip_path_random):
-                print('Directory {} not found'.format(args.zip_path_random))
-                sys.exit(-1)
-
-            # if zip-path defined - use it to find archives
-            zip_files_list = findAllSupportedFiles([args.zip_path_random], zip_extensions)
-
-            if len(zip_files_list) == 0:
-                print('No supported archives found in directory {}'.format(args.zip_path))
-                sys.exit(-1)
-
-            self.img_list = findAllSupportedZipFilesRandom(self, zip_files_list)
-
-        else:
-            # use specified path or current directory to find all supported images
-            self.img_list = toImgList(self, findAllSupportedFiles(args.path if args.path else [os.getcwd()], image_extensions))
+        source_path = self.getImageRootPath()
+        self.img_list = self._buildImageListFromSourcePath(source_path) if source_path else []
 
         if len(self.img_list) == 0:
-            print('No supported images found')
-            sys.exit(-1)
+            if source_path:
+                print('No supported images found in source: {0}'.format(source_path))
+            print('No image source selected. Use File -> Set Image Source...')
+            self.cur_timer = self.max_timer_value
+            return
 
-        # shuffle images
-        random.shuffle(self.img_list)
+        # Restore per-path playback settings (if any).
+        self.applyPlaybackStateForCurrentPath()
+
+        # randomize first cycle order in random mode
+        if self.random_play_mode:
+            self.shuffle_cycle()
+
+        self.restoreLastImagePosition()
 
         print('{} images found'.format(len(self.img_list)))
-
-        self.max_timer_value = args.timeout
-
-        self.window_width = args.width
-        self.window_height = args.height
 
     def append_img(self, img):
         self.img_list.append(img)
 
-    def update_list(self):
+    def update_list(self, force=False):
+        if not force and not self.random_play_mode:
+            return
+
         if (self.cur_img_index + 1) >= len(self.img_list):
             return
 
@@ -168,32 +703,168 @@ class ImageList:
         # return temporary list to the back of the list
         self.img_list[(self.cur_img_index + 1):] = img_list_copy
 
+    def shuffle_cycle(self, prev_img=None):
+        random.shuffle(self.img_list)
+
+        # avoid showing the same image twice when switching to next cycle
+        if prev_img is not None and len(self.img_list) > 1 and self.img_list[0] is prev_img:
+            swap_index = random.randrange(1, len(self.img_list))
+            self.img_list[0], self.img_list[swap_index] = self.img_list[swap_index], self.img_list[0]
+
+    def isRandomPlayMode(self):
+        return self.random_play_mode
+
+    def togglePlayMode(self):
+        self.random_play_mode = not self.random_play_mode
+
+        if self.random_play_mode:
+            self.update_list(force=True)
+
+        self._capture_current_path_playback_state(save_to_disk=True)
+        self.saveConfig()
+
+        mode = 'random' if self.random_play_mode else 'sequential'
+        print('Playback mode: {0}'.format(mode))
+
+        return self.random_play_mode
+
     def getCurTimer(self, decrement=True):
+        if not self.hasImages():
+            return '--:--'
 
         if self.timer_paused:
-            return 'PAUSE'
+            if self.timer_expired_hold and self.timer_end_mode == timer_end_mode_overtime:
+                return '+{:02d}:{:02d}'.format(
+                    int(self.timer_overtime_seconds / 60),
+                    int(self.timer_overtime_seconds % 60)
+                )
+            if self.timer_expired_hold:
+                return '00:00'
+            return '{:02d}:{:02d}'.format(int(self.cur_timer / 60), int(self.cur_timer % 60))
+
+        if self.timer_expired_hold:
+            if self.timer_end_mode == timer_end_mode_overtime:
+                if decrement:
+                    self.timer_overtime_seconds += 1
+                return '+{:02d}:{:02d}'.format(
+                    int(self.timer_overtime_seconds / 60),
+                    int(self.timer_overtime_seconds % 60)
+                )
+            return '00:00'
 
         if decrement:
             self.cur_timer -= 1
 
         if self.cur_timer <= 0:
-            self.change(1)
+            if self.timer_end_mode == timer_end_mode_auto_next:
+                self.change(1)
 
-            # we must return expired to actually change image
-            # when we go back in this function to change timer value
-            return 'expired'
+                # we must return expired to actually change image
+                # when we go back in this function to change timer value
+                return 'expired'
+
+            self.cur_timer = 0
+            self.timer_expired_hold = True
+            self.timer_overtime_seconds = 0
+            return '00:00'
 
         return '{:02d}:{:02d}'.format(int(self.cur_timer / 60), int(self.cur_timer % 60))
 
     def getCurTimerColor(self):
+        if not self.hasImages():
+            return 'gray'
 
         if self.timer_paused:
-            return 'gray'
+            return 'yellow'
+
+        if self.timer_expired_hold:
+            return 'red'
 
         if self.cur_timer <= 5:
             return 'red'
 
         return 'white'
+
+    def getTimerSeconds(self):
+        return self.max_timer_value
+
+    def getTimerEndMode(self):
+        return self.timer_end_mode
+
+    def isPrestartCountdownEnabled(self):
+        return self.prestart_countdown_enabled
+
+    def togglePrestartCountdownEnabled(self):
+        self.prestart_countdown_enabled = not self.prestart_countdown_enabled
+        self.saveConfig()
+        return self.prestart_countdown_enabled
+
+    def setTimerSeconds(self, seconds):
+        if seconds <= 0:
+            return False
+
+        self.max_timer_value = seconds
+        self.cur_timer = self.max_timer_value
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
+        self._capture_current_path_playback_state(save_to_disk=True)
+        self.saveConfig()
+        print('Timer value set to {0} second(s).'.format(self.max_timer_value))
+        return True
+
+    def isStayOnTop(self):
+        return self.stay_on_top
+
+    def toggleStayOnTop(self):
+        self.stay_on_top = not self.stay_on_top
+        self.saveConfig()
+        return self.stay_on_top
+
+    def isAutoNextOnTimerEnd(self):
+        return self.timer_end_mode == timer_end_mode_auto_next
+
+    def isTimerExpiredHold(self):
+        return self.timer_expired_hold
+
+    def isTimerPaused(self):
+        return self.timer_paused
+
+    def setTimerEndMode(self, mode):
+        normalized = self._normalize_timer_end_mode(mode)
+        if normalized == '':
+            return False
+
+        if self.timer_end_mode == normalized:
+            return False
+
+        self.timer_end_mode = normalized
+        advanced = False
+
+        # If the timer had already expired in hold mode, continue immediately when auto-next is enabled.
+        if self.timer_end_mode == timer_end_mode_auto_next and self.timer_expired_hold and self.hasImages() and not self.timer_paused:
+            self.change(1)
+            advanced = True
+        elif self.timer_end_mode != timer_end_mode_overtime:
+            self.timer_overtime_seconds = 0
+
+        self._capture_current_path_playback_state(save_to_disk=True)
+        self.saveConfig()
+        return advanced
+
+    def cycleTimerEndMode(self):
+        idx = timer_end_modes.index(self.timer_end_mode)
+        next_mode = timer_end_modes[(idx + 1) % len(timer_end_modes)]
+        self.setTimerEndMode(next_mode)
+        return self.timer_end_mode
+
+    # Backward compatibility for older caller.
+    def setAutoNextOnTimerEnd(self, enabled):
+        return self.setTimerEndMode(timer_end_mode_auto_next if bool(enabled) else timer_end_mode_hold)
+
+    def toggleAutoNextOnTimerEnd(self):
+        if self.timer_end_mode == timer_end_mode_auto_next:
+            return self.setTimerEndMode(timer_end_mode_hold)
+        return self.setTimerEndMode(timer_end_mode_auto_next)
 
     def pause(self):
         if self.timer_paused:
@@ -203,7 +874,61 @@ class ImageList:
             self.timer_paused = True
             print('Paused ... ')
 
+    def resetTimer(self):
+        self.cur_timer = self.max_timer_value
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
+        print('Timer reset to {0} second(s).'.format(self.max_timer_value))
+
+    def _setCurrentImageByIndex(self, index):
+        if not self.hasImages():
+            self.cur_image_path = ''
+            self.cur_timer = self.max_timer_value
+            self.timer_expired_hold = False
+            self.timer_overtime_seconds = 0
+            return False
+
+        index_int = int(index)
+        if index_int < 0 or index_int >= len(self.img_list):
+            return False
+
+        if self.cur_image_path != '':
+            self.total_time_spent += (self.max_timer_value - max(self.cur_timer, 0))
+            print('Image {0} took {1} second(s).'.format(self.cur_img_index, self.max_timer_value - self.cur_timer))
+
+        self.cur_timer = self.max_timer_value
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
+
+        if self.timer_paused:
+            self.pause()
+
+        self.cur_img_index = index_int
+        self.cur_image_path = self.img_list[self.cur_img_index].get_path()
+        self.last_image_path = self.cur_image_path
+        self._capture_current_path_playback_state(save_to_disk=True)
+        return True
+
+    def resetImageOrderAndPickRandom(self):
+        if not self.hasImages():
+            return False
+
+        if self.random_play_mode:
+            self.shuffle_cycle()
+
+        target_index = random.randrange(0, len(self.img_list))
+        if len(self.img_list) > 1 and target_index == self.cur_img_index:
+            target_index = (target_index + 1) % len(self.img_list)
+
+        return self._setCurrentImageByIndex(target_index)
+
     def change(self, direction):
+        if not self.hasImages():
+            self.cur_image_path = ''
+            self.cur_timer = self.max_timer_value
+            self.timer_expired_hold = False
+            self.timer_overtime_seconds = 0
+            return
 
         # if it's not the first run - save and print some stats
         if self.cur_image_path != '':
@@ -211,6 +936,8 @@ class ImageList:
             print('Image {0} took {1} second(s).'.format(self.cur_img_index, self.max_timer_value - self.cur_timer))
 
         self.cur_timer = self.max_timer_value
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
 
         # unpause if was paused
         if self.timer_paused:
@@ -230,26 +957,20 @@ class ImageList:
             self.cur_img_index += direction
 
         if self.cur_img_index == len(self.img_list):
+            if direction == 1 and self.random_play_mode:
+                prev_img = self.img_list[-1]
+                self.shuffle_cycle(prev_img)
             self.cur_img_index = 0
         elif self.cur_img_index < 0:
             self.cur_img_index = len(self.img_list) - 1
 
         self.cur_image_path = self.img_list[self.cur_img_index].get_path()
+        self.last_image_path = self.cur_image_path
+        self._capture_current_path_playback_state(save_to_disk=True)
 
         # timeImgLabel.config(image=cur_photo)
 
         # imgFileNameLabel.config(text=img_list[cur_img_index].get_path(), wraplength=cur_window_width)
-
-    def excludeFolder(self):
-
-        print('Exclude folder/archive: {0}'.format(self.img_list[self.cur_img_index].get_folder()))
-
-        self.img_list = [item for item in self.img_list if not self.img_list[self.cur_img_index].same_folder(item)]
-
-        print('{0} images left, current {1}'.format(len(self.img_list), self.cur_img_index))
-
-        self.change(1)
-
 
 class ImagePath:
     """Path to image"""
