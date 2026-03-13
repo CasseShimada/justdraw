@@ -94,12 +94,14 @@ ApplicationWindow {
 
     component CompactSubMenuArrow : Text {
         color: parent && parent.enabled ? "#f2f2f2" : "#777777"
-        font.pixelSize: uiMetrics.menuFontSize
+        font.pixelSize: 14
+        font.bold: true
         text: "\u203a"
-        width: 12
+        width: 14
         height: uiMetrics.menuItemHeight
-        x: parent ? (parent.width - width - uiMetrics.menuItemHorizontalPadding) : 0
-        y: parent ? Math.round((parent.height - height) / 2) : 0
+        anchors.right: parent ? parent.right : undefined
+        anchors.rightMargin: uiMetrics.menuItemHorizontalPadding
+        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
