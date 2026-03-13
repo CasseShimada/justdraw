@@ -92,47 +92,35 @@ ApplicationWindow {
         }
     }
 
+    component CompactSubMenuArrow : Text {
+        color: parent && parent.enabled ? "#f2f2f2" : "#777777"
+        font.pixelSize: uiMetrics.menuFontSize
+        text: "\u203a"
+        width: 12
+        height: uiMetrics.menuItemHeight
+        x: parent ? (parent.width - width - uiMetrics.menuItemHorizontalPadding) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+    }
+
     Component {
         id: compactMenuItemDelegate
 
-        MenuItem {
-            id: control
-            implicitHeight: uiMetrics.menuItemHeight
-            height: implicitHeight
-            topPadding: uiMetrics.menuItemVerticalPadding
-            bottomPadding: uiMetrics.menuItemVerticalPadding
-            leftPadding: uiMetrics.menuItemHorizontalPadding
-            rightPadding: uiMetrics.menuItemHorizontalPadding
-            font.pixelSize: uiMetrics.menuFontSize
-            palette.text: "#f2f2f2"
-            palette.buttonText: "#f2f2f2"
-            palette.windowText: "#f2f2f2"
-            palette.highlight: "#3a3a3a"
-            palette.highlightedText: "#f2f2f2"
-
-            contentItem: Text {
-                text: control.text
-                color: control.enabled ? "#f2f2f2" : "#777777"
-                font.pixelSize: uiMetrics.menuFontSize
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-
-            background: Rectangle {
-                color: control.highlighted ? "#3a3a3a" : "transparent"
-                radius: 4
-            }
-        }
+        CompactMenuItem {}
     }
 
     component CompactMenuItem : MenuItem {
         id: control
+        property Menu presentedMenu: null
+        readonly property bool hasSubMenu: !!(control.subMenu || control.presentedMenu)
         implicitHeight: uiMetrics.menuItemHeight
         height: implicitHeight
+        padding: 0
         topPadding: uiMetrics.menuItemVerticalPadding
         bottomPadding: uiMetrics.menuItemVerticalPadding
         leftPadding: uiMetrics.menuItemHorizontalPadding
-        rightPadding: uiMetrics.menuItemHorizontalPadding
+        rightPadding: hasSubMenu ? 22 : uiMetrics.menuItemHorizontalPadding
         font.pixelSize: uiMetrics.menuFontSize
         palette.text: "#f2f2f2"
         palette.buttonText: "#f2f2f2"
@@ -142,15 +130,104 @@ ApplicationWindow {
 
         contentItem: Text {
             text: control.text
+            leftPadding: 0
+            rightPadding: control.hasSubMenu ? 18 : 0
             color: control.enabled ? "#f2f2f2" : "#777777"
             font.pixelSize: uiMetrics.menuFontSize
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
 
+        arrow: CompactSubMenuArrow {
+            visible: control.hasSubMenu
+        }
+
         background: Rectangle {
             color: control.highlighted ? "#3a3a3a" : "transparent"
             radius: 4
+        }
+    }
+
+    component CompactSubMenuItem : CompactMenuItem {
+        id: control
+
+        Timer {
+            id: submenuCloseDelay
+            interval: 140
+            repeat: false
+            onTriggered: {
+                if (!control.presentedMenu || !control.presentedMenu.opened) {
+                    return;
+                }
+                if (control.highlighted) {
+                    return;
+                }
+                if (control.presentedMenu.pointerInside === true) {
+                    return;
+                }
+                control.presentedMenu.close();
+            }
+        }
+
+        function openPresentedMenu() {
+            if (!presentedMenu) {
+                return;
+            }
+
+            var p = mapToItem(Overlay.overlay, width - 1, 0);
+            presentedMenu.x = p.x;
+            presentedMenu.y = p.y;
+            if (!presentedMenu.opened) {
+                presentedMenu.open();
+            }
+        }
+
+        onHighlightedChanged: {
+            if (highlighted && menu && menu.opened) {
+                submenuCloseDelay.stop();
+                openPresentedMenu();
+            } else {
+                submenuCloseDelay.restart();
+            }
+        }
+
+        onTriggered: {
+            submenuCloseDelay.stop();
+            openPresentedMenu();
+        }
+
+        Keys.onRightPressed: function(event) {
+            submenuCloseDelay.stop();
+            openPresentedMenu();
+            event.accepted = true;
+        }
+
+        Keys.onEnterPressed: function(event) {
+            submenuCloseDelay.stop();
+            openPresentedMenu();
+            event.accepted = true;
+        }
+
+        Keys.onReturnPressed: function(event) {
+            submenuCloseDelay.stop();
+            openPresentedMenu();
+            event.accepted = true;
+        }
+
+        Connections {
+            target: control.presentedMenu
+
+            function onPointerInsideChanged() {
+                if (control.presentedMenu.pointerInside === true) {
+                    submenuCloseDelay.stop();
+                } else if (!control.highlighted && control.presentedMenu.opened) {
+                    submenuCloseDelay.restart();
+                }
+            }
+
+            function onAboutToHide() {
+                submenuCloseDelay.stop();
+            }
         }
     }
 
@@ -974,56 +1051,67 @@ ApplicationWindow {
                 onTriggered: selectImageFolderAction()
             }
 
-            Menu {
-                id: recentPathsMenu
-                title: "Recent Paths"
-                popupType: Popup.Item
-                implicitWidth: 260
-                width: implicitWidth
-                delegate: compactMenuItemDelegate
-                padding: 0
-                topPadding: 0
-                bottomPadding: 0
-                leftPadding: 0
-                rightPadding: 0
-                font.pixelSize: uiMetrics.menuFontSize
-                palette.text: "#f2f2f2"
-                palette.buttonText: "#f2f2f2"
-                palette.windowText: "#f2f2f2"
-                palette.highlight: "#3a3a3a"
-                palette.highlightedText: "#f2f2f2"
-                background: Rectangle {
-                    color: "#202020"
-                    border.color: "#5a5a5a"
-                    border.width: 1
-                    radius: 6
-                }
-                onAboutToShow: {
-                    debugLog("recentPathsMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")");
-                    refreshRecentImagePaths();
-                }
-                onAboutToHide: debugLog("recentPathsMenu aboutToHide")
+            CompactSubMenuItem {
+                text: "Recent Paths"
+                presentedMenu: recentPathsMenu
 
-                CompactMenuItem {
-                    text: "(No recent paths)"
-                    enabled: false
-                    visible: recentImagePaths.length === 0
-                }
+                Menu {
+                    id: recentPathsMenu
+                    title: "Recent Paths"
+                    parent: Overlay.overlay
+                    property bool pointerInside: submenuHover.hovered
+                    popupType: Popup.Item
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    implicitWidth: 260
+                    width: implicitWidth
+                    delegate: compactMenuItemDelegate
+                    padding: 0
+                    topPadding: 0
+                    bottomPadding: 0
+                    leftPadding: 0
+                    rightPadding: 0
+                    font.pixelSize: uiMetrics.menuFontSize
+                    palette.text: "#f2f2f2"
+                    palette.buttonText: "#f2f2f2"
+                    palette.windowText: "#f2f2f2"
+                    palette.highlight: "#3a3a3a"
+                    palette.highlightedText: "#f2f2f2"
+                    background: Rectangle {
+                        color: "#202020"
+                        border.color: "#5a5a5a"
+                        border.width: 1
+                        radius: 6
+                    }
+                    HoverHandler {
+                        id: submenuHover
+                    }
+                    onAboutToShow: {
+                        debugLog("recentPathsMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")");
+                        refreshRecentImagePaths();
+                    }
+                    onAboutToHide: debugLog("recentPathsMenu aboutToHide")
 
-                Instantiator {
-                    model: recentImagePaths
-
-                    delegate: CompactMenuItem {
-                        text: modelData
-                        onTriggered: switchToRecentPath(modelData)
+                    CompactMenuItem {
+                        text: "(No recent paths)"
+                        enabled: false
+                        visible: recentImagePaths.length === 0
                     }
 
-                    onObjectAdded: function(index, object) {
-                        recentPathsMenu.insertItem(index, object);
-                    }
+                    Instantiator {
+                        model: recentImagePaths
 
-                    onObjectRemoved: function(index, object) {
-                        recentPathsMenu.removeItem(object);
+                        delegate: CompactMenuItem {
+                            text: modelData
+                            onTriggered: switchToRecentPath(modelData)
+                        }
+
+                        onObjectAdded: function(index, object) {
+                            recentPathsMenu.insertItem(index, object);
+                        }
+
+                        onObjectRemoved: function(index, object) {
+                            recentPathsMenu.removeItem(object);
+                        }
                     }
                 }
             }
@@ -1142,46 +1230,57 @@ ApplicationWindow {
                 onTriggered: togglePrestartCountdownAction()
             }
 
-            Menu {
-                id: timerEndModeMenu
-                title: "Timer End Mode"
-                popupType: Popup.Item
-                implicitWidth: 240
-                width: implicitWidth
-                delegate: compactMenuItemDelegate
-                padding: 0
-                topPadding: 0
-                bottomPadding: 0
-                leftPadding: 0
-                rightPadding: 0
-                font.pixelSize: uiMetrics.menuFontSize
-                palette.text: "#f2f2f2"
-                palette.buttonText: "#f2f2f2"
-                palette.windowText: "#f2f2f2"
-                palette.highlight: "#3a3a3a"
-                palette.highlightedText: "#f2f2f2"
-                background: Rectangle {
-                    color: "#202020"
-                    border.color: "#5a5a5a"
-                    border.width: 1
-                    radius: 6
-                }
-                onAboutToShow: debugLog("timerEndModeMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")")
-                onAboutToHide: debugLog("timerEndModeMenu aboutToHide")
+            CompactSubMenuItem {
+                text: "Timer End Mode"
+                presentedMenu: timerEndModeMenu
 
-                CompactMenuItem {
-                    text: (timerEndMode === "auto_next" ? "✓ " : "") + "Auto Next Image"
-                    onTriggered: setTimerEndModeAction("auto_next")
-                }
+                Menu {
+                    id: timerEndModeMenu
+                    title: "Timer End Mode"
+                    parent: Overlay.overlay
+                    property bool pointerInside: timerEndModeHover.hovered
+                    popupType: Popup.Item
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    implicitWidth: 240
+                    width: implicitWidth
+                    delegate: compactMenuItemDelegate
+                    padding: 0
+                    topPadding: 0
+                    bottomPadding: 0
+                    leftPadding: 0
+                    rightPadding: 0
+                    font.pixelSize: uiMetrics.menuFontSize
+                    palette.text: "#f2f2f2"
+                    palette.buttonText: "#f2f2f2"
+                    palette.windowText: "#f2f2f2"
+                    palette.highlight: "#3a3a3a"
+                    palette.highlightedText: "#f2f2f2"
+                    background: Rectangle {
+                        color: "#202020"
+                        border.color: "#5a5a5a"
+                        border.width: 1
+                        radius: 6
+                    }
+                    HoverHandler {
+                        id: timerEndModeHover
+                    }
+                    onAboutToShow: debugLog("timerEndModeMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")")
+                    onAboutToHide: debugLog("timerEndModeMenu aboutToHide")
 
-                CompactMenuItem {
-                    text: (timerEndMode === "hold" ? "✓ " : "") + "Stay On Current Image"
-                    onTriggered: setTimerEndModeAction("hold")
-                }
+                    CompactMenuItem {
+                        text: (timerEndMode === "auto_next" ? "✓ " : "") + "Auto Next Image"
+                        onTriggered: setTimerEndModeAction("auto_next")
+                    }
 
-                CompactMenuItem {
-                    text: (timerEndMode === "overtime" ? "✓ " : "") + "Overtime Count Up"
-                    onTriggered: setTimerEndModeAction("overtime")
+                    CompactMenuItem {
+                        text: (timerEndMode === "hold" ? "✓ " : "") + "Stay On Current Image"
+                        onTriggered: setTimerEndModeAction("hold")
+                    }
+
+                    CompactMenuItem {
+                        text: (timerEndMode === "overtime" ? "✓ " : "") + "Overtime Count Up"
+                        onTriggered: setTimerEndModeAction("overtime")
+                    }
                 }
             }
         }
