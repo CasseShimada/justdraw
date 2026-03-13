@@ -31,6 +31,7 @@ color_practice_sub_modes = ('palette', 'photo')
 default_color_practice_min_luma = 0.22
 default_color_practice_max_luma = 0.82
 default_color_practice_min_saturation = 0.35
+default_color_blocks_shape_mode_enabled = False
 playback_state_file_name = 'justdraw_playback_state.json'
 
 timer_end_mode_auto_next = 'auto_next'
@@ -188,6 +189,7 @@ class ImageList:
                 'min_luma': default_color_practice_min_luma,
                 'max_luma': default_color_practice_max_luma,
                 'min_saturation': default_color_practice_min_saturation,
+                'shape_mode_enabled': default_color_blocks_shape_mode_enabled,
             },
             app_mode_color_photo: {
                 'image_root_path': '',
@@ -220,6 +222,7 @@ class ImageList:
             mode_state['min_luma'] = self.color_practice_min_luma
             mode_state['max_luma'] = self.color_practice_max_luma
             mode_state['min_saturation'] = self.color_practice_min_saturation
+            mode_state['shape_mode_enabled'] = self.getColorBlocksShapeModeEnabled()
 
     def _apply_mode_state_to_runtime(self):
         self.playback_profile = self._active_playback_profile()
@@ -383,6 +386,10 @@ class ImageList:
             1,
             int(self._to_float(data.get('color_blocks_stripe_count', 1), 1))
         )
+        self.mode_states[app_mode_color_blocks]['shape_mode_enabled'] = self._to_bool(
+            data.get('color_blocks_shape_mode_enabled', default_color_blocks_shape_mode_enabled),
+            default_color_blocks_shape_mode_enabled
+        )
 
         if isinstance(modes_data, dict):
             for mode_name in app_modes:
@@ -441,6 +448,10 @@ class ImageList:
                 default_color_practice_min_saturation
             ),
             'color_blocks_stripe_count': int(max(1, self._to_float(blocks_mode.get('stripe_count', 1), 1))),
+            'color_blocks_shape_mode_enabled': self._to_bool(
+                blocks_mode.get('shape_mode_enabled', default_color_blocks_shape_mode_enabled),
+                default_color_blocks_shape_mode_enabled
+            ),
             'color_photo_image_root_path': str(color_photo_mode.get('image_root_path', '')).strip(),
             'color_photo_last_image_path': str(color_photo_mode.get('last_image_path', '')).strip(),
             'color_photo_random_play_mode': self._to_bool(color_photo_mode.get('random_play_mode', False), False),
@@ -1223,6 +1234,10 @@ class ImageList:
                 blocks_mode.get('min_saturation', default_color_practice_min_saturation),
                 default_color_practice_min_saturation
             ),
+            'shape_mode_enabled': self._to_bool(
+                blocks_mode.get('shape_mode_enabled', default_color_blocks_shape_mode_enabled),
+                default_color_blocks_shape_mode_enabled
+            ),
         }
 
     def setColorBlocksSettings(self, stripe_count, min_luma, max_luma, min_saturation):
@@ -1255,6 +1270,25 @@ class ImageList:
             self.color_practice_min_luma = next_min_luma
             self.color_practice_max_luma = next_max_luma
             self.color_practice_min_saturation = next_min_saturation
+        self.saveConfig()
+        return True
+
+    def getColorBlocksShapeModeEnabled(self):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        return self._to_bool(
+            blocks_mode.get('shape_mode_enabled', default_color_blocks_shape_mode_enabled),
+            default_color_blocks_shape_mode_enabled
+        )
+
+    def setColorBlocksShapeModeEnabled(self, enabled):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        new_value = self._to_bool(enabled, default_color_blocks_shape_mode_enabled)
+        if self._to_bool(
+            blocks_mode.get('shape_mode_enabled', default_color_blocks_shape_mode_enabled),
+            default_color_blocks_shape_mode_enabled
+        ) == new_value:
+            return False
+        blocks_mode['shape_mode_enabled'] = new_value
         self.saveConfig()
         return True
 

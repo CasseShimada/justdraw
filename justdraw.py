@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 # Avoid Windows style plugin dependency issues in some PyQt6 installations.
@@ -11,16 +12,17 @@ os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
 
 try:
     from PyQt6.QtQml import QQmlApplicationEngine
-    from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt6.QtCore import QTimer, QObject, QUrl, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt6.QtGui import QColor, QFont, QImage, QIcon, QPainter
+    from PyQt6.QtCore import QTimer, QObject, QRectF, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog
 except ImportError:
     from PyQt5.QtQml import QQmlApplicationEngine
-    from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt5.QtCore import QTimer, QObject, QUrl, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt5.QtGui import QColor, QFont, QImage, QIcon, QPainter
+    from PyQt5.QtCore import QTimer, QObject, QRectF, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog
 
 from images import ImageList
+import video_tools
 
 print(os.getcwd())
 
@@ -176,8 +178,18 @@ class Backend(QObject):
         arguments=['stripe_count, min_luma, max_luma, min_saturation']
     )
 
+    # set color-blocks shape mode toggle
+    setcolorblockshapemodeenabled = pyqtSignal(bool, arguments=['enabled'])
+
     # set color-photo crystallize toggle
     setcolorphotocrystallizeenabled = pyqtSignal(bool, arguments=['enabled'])
+
+    # set ffmpeg-based export availability/busy state
+    setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
+    setprotectedvideoexportbusy = pyqtSignal(bool, arguments=['enabled'])
+
+    # surface backend status messages to QML toast
+    showtoast = pyqtSignal(str, arguments=['message'])
 
     def __init__(self):
         super().__init__()
@@ -191,6 +203,9 @@ class Backend(QObject):
         self.prestart_pending = False
         self.prestart_remaining = 0
         self.image_source_prompt_pending = False
+        self.video_tools = video_tools.find_ffmpeg_tools()
+        self.video_export_busy = False
+        self.video_export_thread = None
 
     def restart_timer_tick_phase(self):
         # Ensure the next decrement happens one full interval after user-triggered resets.
@@ -353,9 +368,19 @@ class Backend(QObject):
             float(settings.get('min_saturation', 0.35))
         )
 
+    def color_block_shape_mode_enabled(self):
+        global imgList
+        self.setcolorblockshapemodeenabled.emit(imgList.getColorBlocksShapeModeEnabled())
+
     def color_photo_crystallize_enabled(self):
         global imgList
         self.setcolorphotocrystallizeenabled.emit(imgList.getColorPhotoCrystallizeEnabled())
+
+    def protected_video_export_available(self):
+        self.setprotectedvideoexportavailable.emit(bool(self.video_tools.get('available')))
+
+    def protected_video_export_busy_state(self):
+        self.setprotectedvideoexportbusy.emit(bool(self.video_export_busy))
 
     def emit_mode_state(self, reload_image=True):
         global imgList
@@ -364,7 +389,10 @@ class Backend(QObject):
         self.color_practice_sub_mode()
         self.color_practice_thresholds()
         self.color_block_settings()
+        self.color_block_shape_mode_enabled()
         self.color_photo_crystallize_enabled()
+        self.protected_video_export_available()
+        self.protected_video_export_busy_state()
         self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
         self.settimervalue.emit(imgList.getTimerSeconds())
         self.settimerendmode.emit(imgList.getTimerEndMode())
@@ -461,6 +489,205 @@ class Backend(QObject):
     def stay_on_top(self):
         global imgList
         self.setstayontop.emit(imgList.isStayOnTop())
+
+    def toast(self, message):
+        text = str(message)
+        print(text)
+        self.showtoast.emit(text)
+
+    def _run_with_window_not_topmost(self, callback):
+        root = engine.rootObjects()[0] if len(engine.rootObjects()) > 0 else None
+        was_stay_on_top = False
+        if root is not None:
+            try:
+                was_stay_on_top = bool(root.property('stayOnTop'))
+            except Exception:
+                was_stay_on_top = False
+
+        if root is not None and was_stay_on_top:
+            root.setProperty('stayOnTop', False)
+            app.processEvents()
+
+        try:
+            return callback()
+        finally:
+            if root is not None and was_stay_on_top:
+                root.setProperty('stayOnTop', True)
+
+    def _create_text_watermark_image(self, username):
+        text = str(username).strip()
+        if text == '':
+            raise ValueError('Username must not be empty')
+
+        temp_handle = tempfile.NamedTemporaryFile(prefix='justdraw_watermark_', suffix='.png', delete=False)
+        temp_path = temp_handle.name
+        temp_handle.close()
+
+        if hasattr(QImage, 'Format'):
+            image = QImage(960, 260, QImage.Format.Format_ARGB32_Premultiplied)
+        else:
+            image = QImage(960, 260, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent if hasattr(Qt, 'GlobalColor') else Qt.transparent)
+
+        painter = QPainter(image)
+        try:
+            if hasattr(QPainter, 'RenderHint'):
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            else:
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setRenderHint(QPainter.TextAntialiasing, True)
+
+            target_rect = QRectF(36.0, 28.0, 888.0, 204.0)
+            if hasattr(Qt, 'AlignmentFlag'):
+                alignment = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
+            else:
+                alignment = int(Qt.AlignCenter | Qt.TextWordWrap)
+            font_size = 54
+            while font_size >= 20:
+                font = QFont()
+                font.setBold(True)
+                font.setPixelSize(font_size)
+                painter.setFont(font)
+                bounding = painter.boundingRect(target_rect, alignment, text)
+                if bounding.width() <= target_rect.width() and bounding.height() <= target_rect.height():
+                    break
+                font_size -= 2
+
+            painter.setPen(Qt.PenStyle.NoPen if hasattr(Qt, 'PenStyle') else Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 88))
+            painter.drawRoundedRect(target_rect, 18.0, 18.0)
+            painter.setPen(QColor(255, 255, 255, 206))
+            painter.drawText(target_rect, alignment, text)
+        finally:
+            painter.end()
+
+        if not image.save(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            raise RuntimeError('Failed to save generated watermark image')
+
+        return temp_path
+
+    def _collect_protected_video_export_options(self):
+        if not self.video_tools.get('available'):
+            return None
+
+        video_filter = (
+            'Video Files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.flv *.ts *.mts *.m2ts);;'
+            'All Files (*)'
+        )
+        image_filter = 'Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)'
+
+        def pick_input():
+            return QFileDialog.getOpenFileName(
+                None,
+                'Export Protected Short Video',
+                os.path.expanduser('~'),
+                video_filter
+            )
+
+        selected_path, _ = self._run_with_window_not_topmost(pick_input)
+        if not selected_path:
+            return None
+
+        def ask_duration():
+            return QInputDialog.getInt(
+                None,
+                'Target Duration',
+                'Target total duration (15-30 seconds):',
+                20,
+                15,
+                30,
+                1
+            )
+
+        target_duration, ok = self._run_with_window_not_topmost(ask_duration)
+        if not ok:
+            return None
+
+        def ask_username():
+            return QInputDialog.getText(
+                None,
+                'Watermark Username',
+                'Username for watermark fallback:'
+            )
+
+        username, ok = self._run_with_window_not_topmost(ask_username)
+        if not ok:
+            return None
+        username = str(username).strip()
+        if username == '':
+            self.toast('Export cancelled: username is required')
+            return None
+
+        def pick_watermark():
+            return QFileDialog.getOpenFileName(
+                None,
+                'Optional Watermark Image (Cancel to use text watermark)',
+                os.path.dirname(selected_path) or os.path.expanduser('~'),
+                image_filter
+            )
+
+        watermark_image_path, _ = self._run_with_window_not_topmost(pick_watermark)
+
+        cleanup_paths = []
+        if watermark_image_path:
+            resolved_watermark_path = watermark_image_path
+        else:
+            resolved_watermark_path = self._create_text_watermark_image(username)
+            cleanup_paths.append(resolved_watermark_path)
+
+        return {
+            'input_path': selected_path,
+            'output_path': video_tools.build_output_path(selected_path),
+            'target_duration': int(target_duration),
+            'username': username,
+            'watermark_path': resolved_watermark_path,
+            'cleanup_paths': cleanup_paths,
+        }
+
+    def _video_export_log(self, message):
+        logger.info('Video export %s', str(message))
+
+    def _set_video_export_busy(self, enabled):
+        self.video_export_busy = bool(enabled)
+        self.protected_video_export_busy_state()
+
+    def _run_protected_video_export_worker(self, options):
+        try:
+            result = video_tools.export_protected_short_video(
+                ffmpeg_path=self.video_tools.get('ffmpeg', ''),
+                ffprobe_path=self.video_tools.get('ffprobe', ''),
+                input_path=options['input_path'],
+                output_path=options['output_path'],
+                target_total_duration=options['target_duration'],
+                watermark_path=options['watermark_path'],
+                logger=self._video_export_log,
+            )
+            message = 'Protected video exported: {0}'.format(os.path.basename(result.get('output_path', options['output_path'])))
+            logger.info(
+                'Protected video export complete: input=%s output=%s final_duration=%.3f speed_factor=%.4f audio_preserved=%s',
+                options['input_path'],
+                result.get('output_path', options['output_path']),
+                float(result.get('final_duration', 0.0)),
+                float(result.get('speed_factor', 1.0)),
+                bool(result.get('audio_preserved'))
+            )
+            self.toast(message)
+        except Exception as exc:
+            logger.exception('Protected video export failed')
+            self.toast('Protected video export failed: {0}'.format(exc))
+        finally:
+            for path in options.get('cleanup_paths', []):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            self._set_video_export_busy(False)
+            self.video_export_thread = None
 
     @pyqtSlot(str)
     def debug_log(self, message):
@@ -737,11 +964,45 @@ class Backend(QObject):
         return changed
 
     @pyqtSlot(bool, result=bool)
+    def set_color_blocks_shape_mode_enabled(self, enabled):
+        global imgList
+        changed = imgList.setColorBlocksShapeModeEnabled(enabled)
+        self.color_block_shape_mode_enabled()
+        return changed
+
+    @pyqtSlot(bool, result=bool)
     def set_color_photo_crystallize_enabled(self, enabled):
         global imgList
         changed = imgList.setColorPhotoCrystallizeEnabled(enabled)
         self.color_photo_crystallize_enabled()
         return changed
+
+    @pyqtSlot(result=bool)
+    def export_protected_short_video(self):
+        if not self.video_tools.get('available'):
+            return False
+        if self.video_export_busy:
+            self.toast('Protected video export is already running')
+            return False
+
+        try:
+            options = self._collect_protected_video_export_options()
+        except Exception as exc:
+            logger.exception('Failed to collect protected video export options')
+            self.toast('Protected video export failed: {0}'.format(exc))
+            return False
+        if not options:
+            return False
+
+        self._set_video_export_busy(True)
+        self.toast('Protected video export started')
+        self.video_export_thread = threading.Thread(
+            target=self._run_protected_video_export_worker,
+            args=(options,),
+            daemon=True
+        )
+        self.video_export_thread.start()
+        return True
 
     @pyqtSlot()
     def toggle_play_mode(self):

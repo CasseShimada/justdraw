@@ -259,11 +259,15 @@ ApplicationWindow {
     property int colorBlocksMaxStripes: 20
     property int colorBlocksStripeCount: 1
     property var colorBlocksPalette: []
+    property var colorBlocksShapes: []
     property real colorBlocksMinLuma: 0.22
     property real colorBlocksMaxLuma: 0.82
     property real colorBlocksMinSaturation: 0.35
+    property bool colorBlocksShapeModeEnabled: false
 
     property bool colorPhotoCrystallizeEnabled: false
+    property bool protectedVideoExportAvailable: false
+    property bool protectedVideoExportBusy: false
 
     property var recentImagePaths: []
     property bool applyingBackendWindowSize: false
@@ -449,6 +453,250 @@ ApplicationWindow {
         }
         colorBlocksStripeCount = normalizedCount;
         colorBlocksPalette = nextPalette.slice(0, normalizedCount);
+        regenerateColorBlocksShapes();
+    }
+
+    function randomBetween(minValue, maxValue) {
+        return minValue + Math.random() * (maxValue - minValue);
+    }
+
+    function pickColorBlocksSeamType() {
+        var types = ["C", "S", "I", "Z"];
+        return types[Math.floor(Math.random() * types.length)];
+    }
+
+    function seamProfileMultipliers(seamType) {
+        if (seamType === "C") {
+            return [0.0, 0.34, 0.64, 0.82, 0.64, 0.34, 0.0];
+        }
+        if (seamType === "S") {
+            return [0.0, 0.82, 0.36, 0.0, -0.36, -0.82, 0.0];
+        }
+        if (seamType === "Z") {
+            return [0.0, 0.92, 0.24, -0.24, -0.72, -0.16, 0.0];
+        }
+        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    }
+
+    function buildColorBlocksCutPoints(bounds, orientation, seamType, splitRatio) {
+        var direction = Math.random() < 0.5 ? -1 : 1;
+        var yFractions = [0.0, 0.16, 0.33, 0.50, 0.67, 0.84, 1.0];
+        var multipliers = seamProfileMultipliers(seamType);
+        var points = [];
+        var minInset = 12;
+
+        if (orientation === "vertical") {
+            var baseX = bounds.x + bounds.w * splitRatio;
+            var amplitudeX = Math.min(bounds.w * 0.28, Math.max(24, bounds.w * 0.16));
+            for (var i = 0; i < yFractions.length; i++) {
+                var pointX = Math.round(baseX + direction * amplitudeX * multipliers[i]);
+                var pointY = Math.round(bounds.y + bounds.h * yFractions[i]);
+                points.push({
+                    x: Math.max(bounds.x + minInset, Math.min(bounds.x + bounds.w - minInset, pointX)),
+                    y: Math.max(bounds.y, Math.min(bounds.y + bounds.h, pointY))
+                });
+            }
+        } else {
+            var baseY = bounds.y + bounds.h * splitRatio;
+            var amplitudeY = Math.min(bounds.h * 0.28, Math.max(24, bounds.h * 0.16));
+            for (var j = 0; j < yFractions.length; j++) {
+                var pointHX = Math.round(bounds.x + bounds.w * yFractions[j]);
+                var pointHY = Math.round(baseY + direction * amplitudeY * multipliers[j]);
+                points.push({
+                    x: Math.max(bounds.x, Math.min(bounds.x + bounds.w, pointHX)),
+                    y: Math.max(bounds.y + minInset, Math.min(bounds.y + bounds.h - minInset, pointHY))
+                });
+            }
+        }
+
+        return points;
+    }
+
+    function buildColorBlocksLeaf(bounds, colorValue) {
+        return {
+            leaf: true,
+            bounds: bounds,
+            color: colorValue,
+            seamType: "",
+            orientation: ""
+        };
+    }
+
+    function chooseColorBlocksSplitOrientation(bounds) {
+        if (bounds.w > bounds.h * 1.18) {
+            return "vertical";
+        }
+        if (bounds.h > bounds.w * 1.18) {
+            return "horizontal";
+        }
+        return Math.random() < 0.5 ? "vertical" : "horizontal";
+    }
+
+    function splitColorBlocksCount(totalCount) {
+        if (totalCount <= 1) {
+            return [1, 0];
+        }
+        var leftCount = Math.max(1, Math.min(totalCount - 1, Math.round(totalCount * randomBetween(0.38, 0.62))));
+        return [leftCount, totalCount - leftCount];
+    }
+
+    function buildColorBlocksChildBounds(bounds, orientation, splitPoints, side) {
+        var firstPoint = splitPoints[0];
+        var lastPoint = splitPoints[splitPoints.length - 1];
+        if (orientation === "vertical") {
+            var topX = firstPoint.x;
+            var bottomX = lastPoint.x;
+            var minX = Math.min(topX, bottomX);
+            var maxX = Math.max(topX, bottomX);
+            if (side === "first") {
+                return { x: Math.round(bounds.x), y: Math.round(bounds.y), w: Math.max(12, Math.round(maxX - bounds.x)), h: Math.round(bounds.h) };
+            }
+            return { x: Math.round(minX), y: Math.round(bounds.y), w: Math.max(12, Math.round(bounds.x + bounds.w - minX)), h: Math.round(bounds.h) };
+        }
+
+        var leftY = firstPoint.y;
+        var rightY = lastPoint.y;
+        var minY = Math.min(leftY, rightY);
+        var maxY = Math.max(leftY, rightY);
+        if (side === "first") {
+            return { x: Math.round(bounds.x), y: Math.round(bounds.y), w: Math.round(bounds.w), h: Math.max(12, Math.round(maxY - bounds.y)) };
+        }
+        return { x: Math.round(bounds.x), y: Math.round(minY), w: Math.round(bounds.w), h: Math.max(12, Math.round(bounds.y + bounds.h - minY)) };
+    }
+
+    function buildColorBlocksSplitTree(bounds, count, palette, startIndex) {
+        if (count <= 1) {
+            var leafColor = startIndex < palette.length ? palette[startIndex] : generateColorBlock();
+            return buildColorBlocksLeaf(bounds, leafColor);
+        }
+
+        var splitCounts = splitColorBlocksCount(count);
+        var orientation = chooseColorBlocksSplitOrientation(bounds);
+        var splitRatio = randomBetween(0.32, 0.68);
+        var seamType = pickColorBlocksSeamType();
+        var splitPoints = buildColorBlocksCutPoints(bounds, orientation, seamType, splitRatio);
+        var firstBounds = buildColorBlocksChildBounds(bounds, orientation, splitPoints, "first");
+        var secondBounds = buildColorBlocksChildBounds(bounds, orientation, splitPoints, "second");
+
+        return {
+            leaf: false,
+            bounds: bounds,
+            orientation: orientation,
+            seamType: seamType,
+            splitPoints: splitPoints,
+            first: buildColorBlocksSplitTree(firstBounds, splitCounts[0], palette, startIndex),
+            second: buildColorBlocksSplitTree(secondBounds, splitCounts[1], palette, startIndex + splitCounts[0])
+        };
+    }
+
+    function regenerateColorBlocksShapes() {
+        if (!colorBlocksCanvas || colorBlocksCanvas.width <= 0 || colorBlocksCanvas.height <= 0) {
+            colorBlocksShapes = null;
+            if (colorBlocksShapesCanvas) {
+                colorBlocksShapesCanvas.requestPaint();
+            }
+            return;
+        }
+
+        var count = Math.max(1, colorBlocksStripeCount);
+        colorBlocksShapes = buildColorBlocksSplitTree(
+            { x: 0, y: 0, w: colorBlocksCanvas.width, h: colorBlocksCanvas.height },
+            count,
+            colorBlocksPalette,
+            0
+        );
+        if (colorBlocksShapesCanvas) {
+            colorBlocksShapesCanvas.requestPaint();
+        }
+    }
+
+    function interpolateColorBlocksSeam(points, sampleValue, axisKey, resultKey) {
+        if (!points || points.length === 0) {
+            return 0;
+        }
+        if (points.length === 1) {
+            return points[0][resultKey];
+        }
+
+        for (var i = 0; i < points.length - 1; i++) {
+            var startPoint = points[i];
+            var endPoint = points[i + 1];
+            var startValue = startPoint[axisKey];
+            var endValue = endPoint[axisKey];
+
+            if (sampleValue === startValue) {
+                return startPoint[resultKey];
+            }
+            if ((sampleValue >= startValue && sampleValue <= endValue) ||
+                    (sampleValue >= endValue && sampleValue <= startValue)) {
+                var distance = endValue - startValue;
+                if (Math.abs(distance) < 0.0001) {
+                    return startPoint[resultKey];
+                }
+                var t = (sampleValue - startValue) / distance;
+                return startPoint[resultKey] + (endPoint[resultKey] - startPoint[resultKey]) * t;
+            }
+        }
+
+        if (sampleValue < points[0][axisKey]) {
+            return points[0][resultKey];
+        }
+        return points[points.length - 1][resultKey];
+    }
+
+    function pointBelongsToFirstColorBlocksChild(node, sampleX, sampleY) {
+        var points = node && node.splitPoints ? node.splitPoints : [];
+        if (points.length < 2) {
+            return true;
+        }
+
+        if (node.orientation === "vertical") {
+            return sampleX <= interpolateColorBlocksSeam(points, sampleY, "y", "x");
+        }
+        return sampleY <= interpolateColorBlocksSeam(points, sampleX, "x", "y");
+    }
+
+    function resolveColorBlocksLeafColor(node, sampleX, sampleY) {
+        var current = node;
+        while (current && !current.leaf) {
+            current = pointBelongsToFirstColorBlocksChild(current, sampleX, sampleY) ? current.first : current.second;
+        }
+        return current && current.color ? current.color : "#000000";
+    }
+
+    function paintColorBlocksShapes() {
+        if (!colorBlocksShapesCanvas || !colorBlocksShapeModeEnabled) {
+            return;
+        }
+
+        var ctx = colorBlocksShapesCanvas.getContext("2d");
+        if (ctx.imageSmoothingEnabled !== undefined) {
+            ctx.imageSmoothingEnabled = false;
+        }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, colorBlocksShapesCanvas.width, colorBlocksShapesCanvas.height);
+
+        var canvasWidth = Math.max(1, Math.round(colorBlocksShapesCanvas.width));
+        var canvasHeight = Math.max(1, Math.round(colorBlocksShapesCanvas.height));
+        for (var y = 0; y < canvasHeight; y++) {
+            var sampleY = y + 0.5;
+            var runStart = 0;
+            var runColor = resolveColorBlocksLeafColor(colorBlocksShapes, 0.5, sampleY);
+
+            for (var x = 1; x < canvasWidth; x++) {
+                var sampleX = x + 0.5;
+                var nextColor = resolveColorBlocksLeafColor(colorBlocksShapes, sampleX, sampleY);
+                if (nextColor !== runColor) {
+                    ctx.fillStyle = runColor;
+                    ctx.fillRect(runStart, y, x - runStart, 1);
+                    runStart = x;
+                    runColor = nextColor;
+                }
+            }
+
+            ctx.fillStyle = runColor;
+            ctx.fillRect(runStart, y, canvasWidth - runStart, 1);
+        }
     }
 
     function persistColorBlocksSettings() {
@@ -484,7 +732,21 @@ ApplicationWindow {
             nextPalette.push(generateColorBlock());
         }
         colorBlocksPalette = nextPalette;
+        regenerateColorBlocksShapes();
         showActionToast("Colors refreshed");
+    }
+
+    function toggleColorBlocksShapeModeAction() {
+        if (!backend || !isColorBlocksMode()) {
+            return;
+        }
+
+        var nextValue = !colorBlocksShapeModeEnabled;
+        backend.set_color_blocks_shape_mode_enabled(nextValue);
+        if (nextValue) {
+            regenerateColorBlocksShapes();
+        }
+        showActionToast(nextValue ? "Shape mode enabled" : "Shape mode disabled");
     }
 
     function copyColorBlocksAction() {
@@ -1005,6 +1267,14 @@ ApplicationWindow {
         showActionToast(!colorPhotoCrystallizeEnabled ? "Crystallize enabled" : "Crystallize disabled");
     }
 
+    function exportProtectedShortVideoAction() {
+        if (!backend || !protectedVideoExportAvailable || protectedVideoExportBusy) {
+            return;
+        }
+
+        backend.export_protected_short_video();
+    }
+
     menuBar: MenuBar {
         id: appMenuBar
         implicitHeight: uiMetrics.menuBarHeight
@@ -1116,6 +1386,15 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+
+            CompactMenuItem {
+                visible: protectedVideoExportAvailable
+                enabled: !protectedVideoExportBusy
+                text: protectedVideoExportBusy
+                    ? "Export Protected Short Video... (Busy)"
+                    : "Export Protected Short Video..."
+                onTriggered: exportProtectedShortVideoAction()
             }
 
             MenuSeparator {}
@@ -1335,6 +1614,11 @@ ApplicationWindow {
                 onTriggered: copyColorBlocksAction()
             }
 
+            CompactMenuItem {
+                text: (colorBlocksShapeModeEnabled ? "✓ " : "") + "Shape Mode"
+                onTriggered: toggleColorBlocksShapeModeAction()
+            }
+
             MenuSeparator {}
 
             CompactMenuItem {
@@ -1513,6 +1797,11 @@ ApplicationWindow {
         CompactMenuItem {
             text: "Copy Colors"
             onTriggered: copyColorBlocksAction()
+        }
+
+        CompactMenuItem {
+            text: (colorBlocksShapeModeEnabled ? "✓ " : "") + "Shape Mode"
+            onTriggered: toggleColorBlocksShapeModeAction()
         }
 
         MenuSeparator {}
@@ -1764,8 +2053,29 @@ ApplicationWindow {
             ensureColorBlocksPaletteLength(colorBlocksStripeCount);
         }
 
+        function onSetcolorblockshapemodeenabled(enabled) {
+            colorBlocksShapeModeEnabled = enabled;
+            if (enabled) {
+                regenerateColorBlocksShapes();
+            } else if (colorBlocksShapesCanvas) {
+                colorBlocksShapesCanvas.requestPaint();
+            }
+        }
+
         function onSetcolorphotocrystallizeenabled(enabled) {
             colorPhotoCrystallizeEnabled = enabled;
+        }
+
+        function onSetprotectedvideoexportavailable(enabled) {
+            protectedVideoExportAvailable = enabled;
+        }
+
+        function onSetprotectedvideoexportbusy(enabled) {
+            protectedVideoExportBusy = enabled;
+        }
+
+        function onShowtoast(message) {
+            showActionToast(message);
         }
     }
 
@@ -2305,18 +2615,35 @@ ApplicationWindow {
                 anchors.fill: parent
                 color: "#000000"
 
-                Repeater {
-                    model: colorBlocksStripeCount
+                onWidthChanged: regenerateColorBlocksShapes()
+                onHeightChanged: regenerateColorBlocksShapes()
 
-                    delegate: Rectangle {
-                        property int leftEdge: Math.floor(index * colorBlocksCanvas.width / Math.max(1, colorBlocksStripeCount))
-                        property int rightEdge: Math.floor((index + 1) * colorBlocksCanvas.width / Math.max(1, colorBlocksStripeCount))
-                        x: leftEdge
-                        y: 0
-                        width: Math.max(1, rightEdge - leftEdge)
-                        height: colorBlocksCanvas.height
-                        color: index < colorBlocksPalette.length ? colorBlocksPalette[index] : "#808080"
+                Item {
+                    anchors.fill: parent
+                    visible: !colorBlocksShapeModeEnabled
+
+                    Repeater {
+                        model: colorBlocksStripeCount
+
+                        delegate: Rectangle {
+                            property int leftEdge: Math.floor(index * colorBlocksCanvas.width / Math.max(1, colorBlocksStripeCount))
+                            property int rightEdge: Math.floor((index + 1) * colorBlocksCanvas.width / Math.max(1, colorBlocksStripeCount))
+                            x: leftEdge
+                            y: 0
+                            width: Math.max(1, rightEdge - leftEdge)
+                            height: colorBlocksCanvas.height
+                            color: index < colorBlocksPalette.length ? colorBlocksPalette[index] : "#808080"
+                        }
                     }
+                }
+
+                Canvas {
+                    id: colorBlocksShapesCanvas
+                    anchors.fill: parent
+                    visible: colorBlocksShapeModeEnabled
+                    antialiasing: false
+                    renderTarget: Canvas.Image
+                    onPaint: paintColorBlocksShapes()
                 }
 
                 MouseArea {
