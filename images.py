@@ -17,6 +17,20 @@ default_window_width = 840
 default_window_height = 1120
 default_timer_seconds = 90
 default_stay_on_top = True
+app_mode_photo_switching = 'photo_switching'
+app_mode_color_blocks = 'color_blocks'
+app_mode_color_photo = 'color_photo'
+app_modes = (app_mode_photo_switching, app_mode_color_blocks, app_mode_color_photo)
+playback_profile_photo_switching = app_mode_photo_switching
+playback_profile_color_photo = app_mode_color_photo
+playback_profiles = (playback_profile_photo_switching, playback_profile_color_photo)
+default_playback_profile = playback_profile_photo_switching
+default_color_practice_enabled = False
+default_color_practice_sub_mode = 'palette'
+color_practice_sub_modes = ('palette', 'photo')
+default_color_practice_min_luma = 0.22
+default_color_practice_max_luma = 0.82
+default_color_practice_min_saturation = 0.35
 playback_state_file_name = 'justdraw_playback_state.json'
 
 timer_end_mode_auto_next = 'auto_next'
@@ -63,10 +77,18 @@ class ImageList:
         self.config_path = join(self.app_data_dir, 'justdraw_config.json')
         self.playback_state_path = join(self.app_data_dir, playback_state_file_name)
         self.playback_states = {}
+        self.app_mode = app_mode_photo_switching
+        self.mode_states = self._default_mode_states()
+        self.playback_profile = default_playback_profile
         self.random_play_mode = False
         self.stay_on_top = default_stay_on_top
         self.timer_end_mode = default_timer_end_mode
         self.prestart_countdown_enabled = False
+        self.color_practice_enabled = default_color_practice_enabled
+        self.color_practice_sub_mode = default_color_practice_sub_mode
+        self.color_practice_min_luma = default_color_practice_min_luma
+        self.color_practice_max_luma = default_color_practice_max_luma
+        self.color_practice_min_saturation = default_color_practice_min_saturation
         self.last_image_path = ''
         self.global_flip_horizontal = False
         self.global_flip_vertical = False
@@ -133,6 +155,115 @@ class ImageList:
 
         return value
 
+    @staticmethod
+    def _to_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _clamp_unit_interval(value):
+        return max(0.0, min(1.0, float(value)))
+
+    @staticmethod
+    def _normalize_app_mode(value):
+        mode = str(value).strip().lower()
+        if mode in app_modes:
+            return mode
+        return ''
+
+    def _default_mode_states(self):
+        return {
+            app_mode_photo_switching: {
+                'image_root_path': '',
+                'last_image_path': '',
+                'random_play_mode': False,
+                'timer_seconds': default_timer_seconds,
+                'timer_end_mode': default_timer_end_mode,
+                'prestart_countdown_enabled': False,
+            },
+            app_mode_color_blocks: {
+                'stripe_count': 1,
+                'min_luma': default_color_practice_min_luma,
+                'max_luma': default_color_practice_max_luma,
+                'min_saturation': default_color_practice_min_saturation,
+            },
+            app_mode_color_photo: {
+                'image_root_path': '',
+                'last_image_path': '',
+                'random_play_mode': False,
+                'crystallize_enabled': False,
+            },
+        }
+
+    def _active_playback_profile(self):
+        if self.app_mode == app_mode_color_photo:
+            return playback_profile_color_photo
+        return playback_profile_photo_switching
+
+    def _sync_runtime_into_mode_states(self):
+        mode_state = self.mode_states.get(self.app_mode, {})
+        if self.app_mode == app_mode_photo_switching:
+            mode_state['image_root_path'] = self.getImageRootPath()
+            mode_state['last_image_path'] = self.last_image_path
+            mode_state['random_play_mode'] = self.random_play_mode
+            mode_state['timer_seconds'] = self.max_timer_value
+            mode_state['timer_end_mode'] = self.timer_end_mode
+            mode_state['prestart_countdown_enabled'] = self.prestart_countdown_enabled
+        elif self.app_mode == app_mode_color_photo:
+            mode_state['image_root_path'] = self.getImageRootPath()
+            mode_state['last_image_path'] = self.last_image_path
+            mode_state['random_play_mode'] = self.random_play_mode
+        elif self.app_mode == app_mode_color_blocks:
+            mode_state['stripe_count'] = int(max(1, self.mode_states[app_mode_color_blocks].get('stripe_count', 1)))
+            mode_state['min_luma'] = self.color_practice_min_luma
+            mode_state['max_luma'] = self.color_practice_max_luma
+            mode_state['min_saturation'] = self.color_practice_min_saturation
+
+    def _apply_mode_state_to_runtime(self):
+        self.playback_profile = self._active_playback_profile()
+        self.color_practice_enabled = self.app_mode != app_mode_photo_switching
+        self.color_practice_sub_mode = 'palette' if self.app_mode == app_mode_color_blocks else 'photo'
+
+        if self.app_mode == app_mode_color_blocks:
+            blocks = self.mode_states.get(app_mode_color_blocks, {})
+            min_luma = self._clamp_unit_interval(self._to_float(blocks.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma))
+            max_luma = self._clamp_unit_interval(self._to_float(blocks.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma))
+            if min_luma > max_luma:
+                min_luma, max_luma = max_luma, min_luma
+            self.color_practice_min_luma = min_luma
+            self.color_practice_max_luma = max_luma
+            self.color_practice_min_saturation = self._clamp_unit_interval(
+                self._to_float(blocks.get('min_saturation', default_color_practice_min_saturation), default_color_practice_min_saturation)
+            )
+            self.image_root_paths = []
+            self.last_image_path = ''
+            self.random_play_mode = False
+            return
+
+        mode_state = self.mode_states.get(self.app_mode, {})
+        root_path = str(mode_state.get('image_root_path', '')).strip()
+        if root_path and exists(root_path) and (isdir(root_path) or (isfile(root_path) and is_file_valid(root_path, zip_extensions))):
+            self.image_root_paths = [root_path]
+        else:
+            self.image_root_paths = []
+        self.last_image_path = str(mode_state.get('last_image_path', '')).strip()
+        self.random_play_mode = self._to_bool(mode_state.get('random_play_mode', False), False)
+
+        if self.app_mode == app_mode_photo_switching:
+            try:
+                timer_seconds = int(mode_state.get('timer_seconds', default_timer_seconds))
+            except (TypeError, ValueError):
+                timer_seconds = default_timer_seconds
+            self.max_timer_value = timer_seconds if timer_seconds > 0 else default_timer_seconds
+            timer_mode = self._normalize_timer_end_mode(mode_state.get('timer_end_mode', default_timer_end_mode))
+            self.timer_end_mode = timer_mode if timer_mode else default_timer_end_mode
+            self.prestart_countdown_enabled = self._to_bool(
+                mode_state.get('prestart_countdown_enabled', False),
+                False
+            )
+
     def getImagePath(self):
         return self.cur_image_path
 
@@ -153,6 +284,7 @@ class ImageList:
 
     def loadConfig(self):
         if not exists(self.config_path):
+            self._apply_mode_state_to_runtime()
             return
 
         try:
@@ -164,13 +296,8 @@ class ImageList:
 
             data = json.loads(raw)
         except (OSError, ValueError):
+            self._apply_mode_state_to_runtime()
             return
-
-        path = str(data.get('image_root_path', '')).strip()
-        if path and exists(path) and (isdir(path) or (isfile(path) and is_file_valid(path, zip_extensions))):
-            self.image_root_paths = [path]
-        else:
-            self.image_root_paths = []
 
         try:
             width = int(data.get('window_width', default_window_width))
@@ -189,28 +316,91 @@ class ImageList:
         else:
             self.window_height = default_window_height
 
-        try:
-            timer_seconds = int(data.get('timer_seconds', default_timer_seconds))
-        except (TypeError, ValueError):
-            timer_seconds = default_timer_seconds
-
-        if timer_seconds > 0:
-            self.max_timer_value = timer_seconds
-        else:
-            self.max_timer_value = default_timer_seconds
-
         # Keep startup behavior: first timer tick should trigger initial image load.
         self.cur_timer = 0
-        self.random_play_mode = self._to_bool(data.get('random_play_mode', False), False)
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
-        mode = self._normalize_timer_end_mode(data.get('timer_end_mode', ''))
-        if mode == '':
-            # Backward compatibility for older config shape.
+
+        modes_data = data.get('modes')
+        legacy_root_path = str(data.get('image_root_path', '')).strip()
+        legacy_last_image_path = str(data.get('last_image_path', '')).strip()
+        legacy_random_play_mode = self._to_bool(data.get('random_play_mode', False), False)
+        try:
+            legacy_timer_seconds = int(data.get('timer_seconds', default_timer_seconds))
+        except (TypeError, ValueError):
+            legacy_timer_seconds = default_timer_seconds
+        if legacy_timer_seconds <= 0:
+            legacy_timer_seconds = default_timer_seconds
+        legacy_timer_end_mode = self._normalize_timer_end_mode(data.get('timer_end_mode', ''))
+        if legacy_timer_end_mode == '':
             auto_next = self._to_bool(data.get('auto_next_on_timer_end', True), True)
-            mode = timer_end_mode_auto_next if auto_next else timer_end_mode_hold
-        self.timer_end_mode = mode
-        self.prestart_countdown_enabled = self._to_bool(data.get('prestart_countdown_enabled', False), False)
-        self.last_image_path = str(data.get('last_image_path', '')).strip()
+            legacy_timer_end_mode = timer_end_mode_auto_next if auto_next else timer_end_mode_hold
+        legacy_prestart = self._to_bool(data.get('prestart_countdown_enabled', False), False)
+        legacy_color_enabled = self._to_bool(
+            data.get('color_practice_enabled', default_color_practice_enabled),
+            default_color_practice_enabled
+        )
+        legacy_sub_mode = str(data.get('color_practice_sub_mode', default_color_practice_sub_mode)).strip().lower()
+        if legacy_sub_mode not in color_practice_sub_modes:
+            legacy_sub_mode = default_color_practice_sub_mode
+        legacy_min_luma = self._clamp_unit_interval(
+            self._to_float(data.get('color_practice_min_luma', default_color_practice_min_luma), default_color_practice_min_luma)
+        )
+        legacy_max_luma = self._clamp_unit_interval(
+            self._to_float(data.get('color_practice_max_luma', default_color_practice_max_luma), default_color_practice_max_luma)
+        )
+        if legacy_min_luma > legacy_max_luma:
+            legacy_min_luma, legacy_max_luma = legacy_max_luma, legacy_min_luma
+        legacy_min_saturation = self._clamp_unit_interval(
+            self._to_float(data.get('color_practice_min_saturation', default_color_practice_min_saturation), default_color_practice_min_saturation)
+        )
+
+        # Migrate old flat config into mode-scoped structure.
+        self.mode_states = self._default_mode_states()
+        self.mode_states[app_mode_photo_switching]['image_root_path'] = legacy_root_path
+        self.mode_states[app_mode_photo_switching]['last_image_path'] = legacy_last_image_path
+        self.mode_states[app_mode_photo_switching]['random_play_mode'] = legacy_random_play_mode
+        self.mode_states[app_mode_photo_switching]['timer_seconds'] = legacy_timer_seconds
+        self.mode_states[app_mode_photo_switching]['timer_end_mode'] = legacy_timer_end_mode
+        self.mode_states[app_mode_photo_switching]['prestart_countdown_enabled'] = legacy_prestart
+        self.mode_states[app_mode_color_blocks]['min_luma'] = legacy_min_luma
+        self.mode_states[app_mode_color_blocks]['max_luma'] = legacy_max_luma
+        self.mode_states[app_mode_color_blocks]['min_saturation'] = legacy_min_saturation
+        self.mode_states[app_mode_color_photo]['image_root_path'] = str(
+            data.get('color_photo_image_root_path', legacy_root_path)
+        ).strip()
+        self.mode_states[app_mode_color_photo]['last_image_path'] = str(
+            data.get('color_photo_last_image_path', '')
+        ).strip()
+        self.mode_states[app_mode_color_photo]['random_play_mode'] = self._to_bool(
+            data.get('color_photo_random_play_mode', False),
+            False
+        )
+        self.mode_states[app_mode_color_photo]['crystallize_enabled'] = self._to_bool(
+            data.get('color_photo_crystallize_enabled', False),
+            False
+        )
+        self.mode_states[app_mode_color_blocks]['stripe_count'] = max(
+            1,
+            int(self._to_float(data.get('color_blocks_stripe_count', 1), 1))
+        )
+
+        if isinstance(modes_data, dict):
+            for mode_name in app_modes:
+                incoming = modes_data.get(mode_name)
+                if not isinstance(incoming, dict):
+                    continue
+                target = self.mode_states[mode_name]
+                for key, value in incoming.items():
+                    target[key] = value
+
+        saved_mode = self._normalize_app_mode(data.get('app_mode', ''))
+        if saved_mode == '':
+            if legacy_color_enabled:
+                saved_mode = app_mode_color_blocks if legacy_sub_mode == 'palette' else app_mode_color_photo
+            else:
+                saved_mode = app_mode_photo_switching
+        self.app_mode = saved_mode
+
         self.global_flip_horizontal = self._to_bool(
             data.get('global_flip_horizontal', data.get('flip_horizontal', False)),
             False
@@ -219,20 +409,45 @@ class ImageList:
             data.get('global_flip_vertical', data.get('flip_vertical', False)),
             False
         )
+        self._apply_mode_state_to_runtime()
 
     def saveConfig(self):
+        self._sync_runtime_into_mode_states()
+
+        legacy_color_enabled = self.app_mode in (app_mode_color_blocks, app_mode_color_photo)
+        legacy_sub_mode = 'palette' if self.app_mode == app_mode_color_blocks else 'photo'
+        photo_mode = self.mode_states[app_mode_photo_switching]
+        blocks_mode = self.mode_states[app_mode_color_blocks]
+        color_photo_mode = self.mode_states[app_mode_color_photo]
+
         data = {
-            'image_root_path': self.getImageRootPath(),
+            'app_mode': self.app_mode,
+            'modes': self.mode_states,
+            'image_root_path': str(photo_mode.get('image_root_path', '')).strip(),
             'window_width': self.window_width,
             'window_height': self.window_height,
-            'timer_seconds': self.max_timer_value,
-            'random_play_mode': self.random_play_mode,
+            'timer_seconds': int(photo_mode.get('timer_seconds', default_timer_seconds)),
+            'random_play_mode': self._to_bool(photo_mode.get('random_play_mode', False), False),
             'stay_on_top': self.stay_on_top,
-            'timer_end_mode': self.timer_end_mode,
-            'prestart_countdown_enabled': self.prestart_countdown_enabled,
+            'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
+            'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
+            'playback_profile': self.playback_profile,
+            'color_practice_enabled': legacy_color_enabled,
+            'color_practice_sub_mode': legacy_sub_mode,
+            'color_practice_min_luma': self._to_float(blocks_mode.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma),
+            'color_practice_max_luma': self._to_float(blocks_mode.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma),
+            'color_practice_min_saturation': self._to_float(
+                blocks_mode.get('min_saturation', default_color_practice_min_saturation),
+                default_color_practice_min_saturation
+            ),
+            'color_blocks_stripe_count': int(max(1, self._to_float(blocks_mode.get('stripe_count', 1), 1))),
+            'color_photo_image_root_path': str(color_photo_mode.get('image_root_path', '')).strip(),
+            'color_photo_last_image_path': str(color_photo_mode.get('last_image_path', '')).strip(),
+            'color_photo_random_play_mode': self._to_bool(color_photo_mode.get('random_play_mode', False), False),
+            'color_photo_crystallize_enabled': self._to_bool(color_photo_mode.get('crystallize_enabled', False), False),
             # Keep legacy key for backward compatibility.
-            'auto_next_on_timer_end': self.timer_end_mode == timer_end_mode_auto_next,
-            'last_image_path': self.last_image_path,
+            'auto_next_on_timer_end': str(photo_mode.get('timer_end_mode', default_timer_end_mode)) == timer_end_mode_auto_next,
+            'last_image_path': str(photo_mode.get('last_image_path', '')).strip(),
             'global_flip_horizontal': self.global_flip_horizontal,
             'global_flip_vertical': self.global_flip_vertical,
         }
@@ -302,7 +517,7 @@ class ImageList:
         target_path = path if path else self.getImageRootPath()
         if not target_path:
             return ''
-        return self._path_key(target_path)
+        return '{0}::{1}'.format(self.playback_profile, self._path_key(target_path))
 
     def _ensure_current_path_playback_state(self):
         key = self._get_path_playback_key()
@@ -315,6 +530,7 @@ class ImageList:
             self.playback_states[key] = state
 
         state['path'] = self.getImageRootPath()
+        state['profile'] = self.playback_profile
         if ('image_view_states' not in state) or (not isinstance(state.get('image_view_states'), dict)):
             state['image_view_states'] = {}
 
@@ -337,14 +553,22 @@ class ImageList:
 
         return True
 
+    def _reset_profile_runtime_defaults(self):
+        self.last_image_path = ''
+        self.random_play_mode = False
+        self.timer_end_mode = default_timer_end_mode
+        self.max_timer_value = default_timer_seconds
+
     def applyPlaybackStateForCurrentPath(self):
         key = self._get_path_playback_key()
         if key == '':
-            return
+            self._reset_profile_runtime_defaults()
+            return False
 
         state = self.playback_states.get(key)
         if not isinstance(state, dict):
-            return
+            self._reset_profile_runtime_defaults()
+            return False
 
         self.last_image_path = str(state.get('last_image_path', self.last_image_path)).strip()
         self.random_play_mode = self._to_bool(state.get('random_play_mode', self.random_play_mode), self.random_play_mode)
@@ -364,10 +588,15 @@ class ImageList:
         except (TypeError, ValueError):
             pass
 
+        return True
+
     def getSavedPlaybackPaths(self):
         result = []
         for state in self.playback_states.values():
             if not isinstance(state, dict):
+                continue
+            state_profile = str(state.get('profile', default_playback_profile)).strip().lower()
+            if state_profile != self.playback_profile:
                 continue
 
             path = str(state.get('path', '')).strip()
@@ -381,6 +610,9 @@ class ImageList:
         ranked = []
         for state in self.playback_states.values():
             if not isinstance(state, dict):
+                continue
+            state_profile = str(state.get('profile', default_playback_profile)).strip().lower()
+            if state_profile != self.playback_profile:
                 continue
 
             path = str(state.get('path', '')).strip()
@@ -614,6 +846,9 @@ class ImageList:
         return True
 
     def setImageRootPath(self, path):
+        if self.app_mode == app_mode_color_blocks:
+            return False
+
         path = str(path).strip()
         if not path:
             return False
@@ -871,6 +1106,170 @@ class ImageList:
         self.prestart_countdown_enabled = not self.prestart_countdown_enabled
         self.saveConfig()
         return self.prestart_countdown_enabled
+
+    def isColorPracticeEnabled(self):
+        return self.app_mode in (app_mode_color_blocks, app_mode_color_photo)
+
+    def setColorPracticeEnabled(self, enabled):
+        new_value = self._to_bool(enabled, default_color_practice_enabled)
+        target_mode = app_mode_color_blocks if new_value else app_mode_photo_switching
+        return self.setAppMode(target_mode)
+
+    def getAppMode(self):
+        return self.app_mode
+
+    def setAppMode(self, mode):
+        normalized = self._normalize_app_mode(mode)
+        if normalized == '':
+            return False
+        if self.app_mode == normalized:
+            return False
+
+        # Persist outgoing mode state first.
+        self.saveResumeState()
+        self._sync_runtime_into_mode_states()
+
+        self.app_mode = normalized
+        self._apply_mode_state_to_runtime()
+
+        if self.app_mode in (app_mode_photo_switching, app_mode_color_photo):
+            self.load()
+            if self.hasImages():
+                self.change(1)
+        else:
+            self.img_list = []
+            self.cur_img_index = 0
+            self.cur_image_path = ''
+
+        self.saveConfig()
+        return True
+
+    def getPlaybackProfile(self):
+        return self.playback_profile
+
+    def setPlaybackProfile(self, profile):
+        normalized = str(profile).strip().lower()
+        if normalized not in playback_profiles:
+            return False
+        target_mode = app_mode_color_photo if normalized == playback_profile_color_photo else app_mode_photo_switching
+        return self.setAppMode(target_mode)
+
+    def getColorPracticeSubMode(self):
+        return self.color_practice_sub_mode
+
+    def setColorPracticeSubMode(self, mode):
+        normalized = str(mode).strip().lower()
+        if normalized not in color_practice_sub_modes:
+            return False
+        target_mode = app_mode_color_blocks if normalized == 'palette' else app_mode_color_photo
+        return self.setAppMode(target_mode)
+
+    def getColorPracticeThresholds(self):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        return {
+            'min_luma': self._to_float(blocks_mode.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma),
+            'max_luma': self._to_float(blocks_mode.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma),
+            'min_saturation': self._to_float(
+                blocks_mode.get('min_saturation', default_color_practice_min_saturation),
+                default_color_practice_min_saturation
+            ),
+        }
+
+    def setColorPracticeThresholds(self, min_luma, max_luma, min_saturation):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        cur_min_luma = self._clamp_unit_interval(
+            self._to_float(blocks_mode.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma)
+        )
+        cur_max_luma = self._clamp_unit_interval(
+            self._to_float(blocks_mode.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma)
+        )
+        cur_min_saturation = self._clamp_unit_interval(
+            self._to_float(blocks_mode.get('min_saturation', default_color_practice_min_saturation), default_color_practice_min_saturation)
+        )
+
+        next_min_luma = self._clamp_unit_interval(self._to_float(min_luma, cur_min_luma))
+        next_max_luma = self._clamp_unit_interval(self._to_float(max_luma, cur_max_luma))
+        next_min_saturation = self._clamp_unit_interval(
+            self._to_float(min_saturation, cur_min_saturation)
+        )
+
+        if next_min_luma > next_max_luma:
+            return False
+
+        if (
+            cur_min_luma == next_min_luma
+            and cur_max_luma == next_max_luma
+            and cur_min_saturation == next_min_saturation
+        ):
+            return False
+
+        blocks_mode['min_luma'] = next_min_luma
+        blocks_mode['max_luma'] = next_max_luma
+        blocks_mode['min_saturation'] = next_min_saturation
+        if self.app_mode == app_mode_color_blocks:
+            self.color_practice_min_luma = next_min_luma
+            self.color_practice_max_luma = next_max_luma
+            self.color_practice_min_saturation = next_min_saturation
+        self.saveConfig()
+        return True
+
+    def getColorBlocksSettings(self):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        return {
+            'stripe_count': int(max(1, self._to_float(blocks_mode.get('stripe_count', 1), 1))),
+            'min_luma': self._to_float(blocks_mode.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma),
+            'max_luma': self._to_float(blocks_mode.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma),
+            'min_saturation': self._to_float(
+                blocks_mode.get('min_saturation', default_color_practice_min_saturation),
+                default_color_practice_min_saturation
+            ),
+        }
+
+    def setColorBlocksSettings(self, stripe_count, min_luma, max_luma, min_saturation):
+        blocks_mode = self.mode_states.get(app_mode_color_blocks, {})
+        try:
+            next_stripe_count = int(stripe_count)
+        except (TypeError, ValueError):
+            next_stripe_count = int(max(1, self._to_float(blocks_mode.get('stripe_count', 1), 1)))
+        next_stripe_count = max(1, min(20, next_stripe_count))
+
+        next_min_luma = self._clamp_unit_interval(self._to_float(min_luma, blocks_mode.get('min_luma', default_color_practice_min_luma)))
+        next_max_luma = self._clamp_unit_interval(self._to_float(max_luma, blocks_mode.get('max_luma', default_color_practice_max_luma)))
+        next_min_saturation = self._clamp_unit_interval(self._to_float(min_saturation, blocks_mode.get('min_saturation', default_color_practice_min_saturation)))
+        if next_min_luma > next_max_luma:
+            return False
+
+        if (
+            int(max(1, self._to_float(blocks_mode.get('stripe_count', 1), 1))) == next_stripe_count
+            and self._to_float(blocks_mode.get('min_luma', default_color_practice_min_luma), default_color_practice_min_luma) == next_min_luma
+            and self._to_float(blocks_mode.get('max_luma', default_color_practice_max_luma), default_color_practice_max_luma) == next_max_luma
+            and self._to_float(blocks_mode.get('min_saturation', default_color_practice_min_saturation), default_color_practice_min_saturation) == next_min_saturation
+        ):
+            return False
+
+        blocks_mode['stripe_count'] = next_stripe_count
+        blocks_mode['min_luma'] = next_min_luma
+        blocks_mode['max_luma'] = next_max_luma
+        blocks_mode['min_saturation'] = next_min_saturation
+        if self.app_mode == app_mode_color_blocks:
+            self.color_practice_min_luma = next_min_luma
+            self.color_practice_max_luma = next_max_luma
+            self.color_practice_min_saturation = next_min_saturation
+        self.saveConfig()
+        return True
+
+    def getColorPhotoCrystallizeEnabled(self):
+        color_photo_mode = self.mode_states.get(app_mode_color_photo, {})
+        return self._to_bool(color_photo_mode.get('crystallize_enabled', False), False)
+
+    def setColorPhotoCrystallizeEnabled(self, enabled):
+        color_photo_mode = self.mode_states.get(app_mode_color_photo, {})
+        new_value = self._to_bool(enabled, False)
+        if self._to_bool(color_photo_mode.get('crystallize_enabled', False), False) == new_value:
+            return False
+        color_photo_mode['crystallize_enabled'] = new_value
+        self.saveConfig()
+        return True
 
     def setTimerSeconds(self, seconds):
         if seconds <= 0:

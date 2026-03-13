@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import subprocess
 import sys
@@ -9,18 +11,62 @@ os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
 
 try:
     from PyQt6.QtQml import QQmlApplicationEngine
-    from PyQt6.QtGui import QImage, QIcon
-    from PyQt6.QtCore import QTimer, QObject, QUrl, pyqtSignal, pyqtSlot
+    from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
+    from PyQt6.QtCore import QTimer, QObject, QUrl, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog
 except ImportError:
     from PyQt5.QtQml import QQmlApplicationEngine
-    from PyQt5.QtGui import QImage, QIcon
-    from PyQt5.QtCore import QTimer, QObject, QUrl, pyqtSignal, pyqtSlot
+    from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
+    from PyQt5.QtCore import QTimer, QObject, QUrl, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog
 
 from images import ImageList
 
 print(os.getcwd())
+
+
+def get_log_file_path():
+    log_dir = os.path.join(os.getcwd(), 'log.')
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, 'latest.log')
+
+
+LOG_FILE_PATH = get_log_file_path()
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE_PATH, mode='w', encoding='utf-8')
+    ]
+)
+
+logger = logging.getLogger('justdraw')
+logger.info('Application startup')
+logger.info('Working directory: %s', os.getcwd())
+logger.info('Log file: %s', LOG_FILE_PATH)
+
+
+def qt_message_handler(msg_type, context, message):
+    if msg_type == QtMsgType.QtDebugMsg:
+        level = logging.DEBUG
+    elif msg_type == QtMsgType.QtInfoMsg:
+        level = logging.INFO
+    elif msg_type == QtMsgType.QtWarningMsg:
+        level = logging.WARNING
+    elif msg_type == QtMsgType.QtCriticalMsg:
+        level = logging.ERROR
+    else:
+        level = logging.CRITICAL
+
+    file_name = getattr(context, 'file', '') or ''
+    line_no = getattr(context, 'line', 0) or 0
+    function_name = getattr(context, 'function', '') or ''
+    logger.log(level, 'QT %s:%s %s | %s', file_name, line_no, function_name, message)
+
+
+qInstallMessageHandler(qt_message_handler)
 
 
 def get_app_resource_dir():
@@ -44,7 +90,23 @@ engine.load(QUrl.fromLocalFile(os.path.join(app_dir, 'main.qml')))
 
 if len(engine.rootObjects()) == 0:
     print('Failed to load QML UI (main.qml).')
+    logger.error('Failed to load QML UI (main.qml)')
     sys.exit(-1)
+
+
+def log_qml_warnings(warnings):
+    for warning in warnings:
+        try:
+            logger.warning('QML warning: %s', warning.toString())
+        except Exception:
+            logger.warning('QML warning: %r', warning)
+
+
+if hasattr(engine, 'warnings'):
+    try:
+        engine.warnings.connect(log_qml_warnings)
+    except Exception:
+        logger.exception('Failed to attach QML warning logger')
 
 
 class Backend(QObject):
@@ -93,6 +155,30 @@ class Backend(QObject):
     # set full-screen pre-start countdown state
     setprestartcountdown = pyqtSignal(int, bool, arguments=['seconds, active'])
 
+    # set whether color practice mode is enabled
+    setcolorpracticeenabled = pyqtSignal(bool, arguments=['enabled'])
+
+    # set current color-practice sub-mode: palette / photo
+    setcolorpracticesubmode = pyqtSignal(str, arguments=['mode'])
+
+    # set current app mode: photo_switching / color_blocks / color_photo
+    setappmode = pyqtSignal(str, arguments=['mode'])
+
+    # set color-practice color thresholds
+    setcolorpracticethresholds = pyqtSignal(
+        float, float, float,
+        arguments=['min_luma, max_luma, min_saturation']
+    )
+
+    # set color-blocks settings (stripe count + thresholds)
+    setcolorblocksettings = pyqtSignal(
+        int, float, float, float,
+        arguments=['stripe_count, min_luma, max_luma, min_saturation']
+    )
+
+    # set color-photo crystallize toggle
+    setcolorphotocrystallizeenabled = pyqtSignal(bool, arguments=['enabled'])
+
     def __init__(self):
         super().__init__()
 
@@ -104,6 +190,7 @@ class Backend(QObject):
         self.prestart_active = False
         self.prestart_pending = False
         self.prestart_remaining = 0
+        self.image_source_prompt_pending = False
 
     def restart_timer_tick_phase(self):
         # Ensure the next decrement happens one full interval after user-triggered resets.
@@ -178,6 +265,10 @@ class Backend(QObject):
     def set_cur_timer(self):
         global imgList
 
+        if imgList.getAppMode() != 'photo_switching':
+            self.emit_timer_visual_state(imgList.getCurTimer(False))
+            return
+
         if self.prestart_active:
             if imgList.isTimerPaused():
                 self.clear_prestart_countdown()
@@ -231,6 +322,57 @@ class Backend(QObject):
         global imgList
         self.setprestartenabled.emit(imgList.isPrestartCountdownEnabled())
 
+    def color_practice_enabled(self):
+        global imgList
+        self.setcolorpracticeenabled.emit(imgList.isColorPracticeEnabled())
+
+    def app_mode(self):
+        global imgList
+        self.setappmode.emit(imgList.getAppMode())
+
+    def color_practice_sub_mode(self):
+        global imgList
+        self.setcolorpracticesubmode.emit(imgList.getColorPracticeSubMode())
+
+    def color_practice_thresholds(self):
+        global imgList
+        thresholds = imgList.getColorPracticeThresholds()
+        self.setcolorpracticethresholds.emit(
+            float(thresholds.get('min_luma', 0.22)),
+            float(thresholds.get('max_luma', 0.82)),
+            float(thresholds.get('min_saturation', 0.35))
+        )
+
+    def color_block_settings(self):
+        global imgList
+        settings = imgList.getColorBlocksSettings()
+        self.setcolorblocksettings.emit(
+            int(settings.get('stripe_count', 1)),
+            float(settings.get('min_luma', 0.22)),
+            float(settings.get('max_luma', 0.82)),
+            float(settings.get('min_saturation', 0.35))
+        )
+
+    def color_photo_crystallize_enabled(self):
+        global imgList
+        self.setcolorphotocrystallizeenabled.emit(imgList.getColorPhotoCrystallizeEnabled())
+
+    def emit_mode_state(self, reload_image=True):
+        global imgList
+        self.app_mode()
+        self.color_practice_enabled()
+        self.color_practice_sub_mode()
+        self.color_practice_thresholds()
+        self.color_block_settings()
+        self.color_photo_crystallize_enabled()
+        self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
+        self.settimervalue.emit(imgList.getTimerSeconds())
+        self.settimerendmode.emit(imgList.getTimerEndMode())
+        self.setprestartenabled.emit(imgList.isPrestartCountdownEnabled())
+        if reload_image:
+            self.reload()
+        self.emit_timer_visual_state(imgList.getCurTimer(False))
+
     def initialize_current_image(self):
         global imgList
 
@@ -240,33 +382,44 @@ class Backend(QObject):
         imgList.change(1)
         self.reload()
         self.restart_timer_tick_phase()
-        self.prestart_pending = imgList.isPrestartCountdownEnabled()
-        self.clear_prestart_countdown()
+        if imgList.getAppMode() == 'photo_switching':
+            self.prestart_pending = imgList.isPrestartCountdownEnabled()
+            self.clear_prestart_countdown()
+        else:
+            self.prestart_pending = False
+            self.clear_prestart_countdown()
         self.emit_timer_visual_state()
 
-    def stay_on_top(self):
-        global imgList
-        self.setstayontop.emit(imgList.isStayOnTop())
-
-    @pyqtSlot(str, str, result=bool)
-    def save_window_size(self, width, height):
+    def ensure_image_source_for_current_mode(self, async_open=True):
         global imgList
 
-        try:
-            width_int = int(width)
-            height_int = int(height)
-        except (TypeError, ValueError):
-            print('Invalid window size: {0}x{1}'.format(width, height))
+        if imgList.getAppMode() not in ('photo_switching', 'color_photo'):
+            return False
+        if imgList.hasImages():
+            return False
+        if self.image_source_prompt_pending:
             return False
 
-        if not imgList.setDefaultWindowSize(width_int, height_int):
-            print('Window size must be positive: {0}x{1}'.format(width_int, height_int))
-            return False
-
+        self.image_source_prompt_pending = True
+        if async_open:
+            QTimer.singleShot(0, self._open_queued_image_source_prompt)
+        else:
+            self._open_queued_image_source_prompt()
         return True
 
-    @pyqtSlot(result=bool)
-    def select_image_root_path(self):
+    def _open_queued_image_source_prompt(self):
+        global imgList
+
+        if not self.image_source_prompt_pending:
+            return False
+        if imgList.getAppMode() not in ('photo_switching', 'color_photo') or imgList.hasImages():
+            self.image_source_prompt_pending = False
+            return False
+
+        print('Opening image folder picker...')
+        return self._open_image_root_path_dialog()
+
+    def _open_image_root_path_dialog(self):
         global imgList
 
         root = engine.rootObjects()[0] if len(engine.rootObjects()) > 0 else None
@@ -288,6 +441,7 @@ class Backend(QObject):
         finally:
             if root is not None and was_stay_on_top:
                 root.setProperty('stayOnTop', True)
+            self.image_source_prompt_pending = False
 
         if not folder:
             return False
@@ -296,12 +450,46 @@ class Backend(QObject):
             print('Invalid image folder or no supported images: {0}'.format(folder))
             return False
 
-        self.settimervalue.emit(imgList.getTimerSeconds())
-        self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
-        self.settimerendmode.emit(imgList.getTimerEndMode())
-        self.reload()
-        self.schedule_timer_start()
+        self.emit_mode_state(reload_image=True)
+        if imgList.getAppMode() == 'photo_switching':
+            self.schedule_timer_start()
+        else:
+            self.prestart_pending = False
+            self.clear_prestart_countdown()
         return True
+
+    def stay_on_top(self):
+        global imgList
+        self.setstayontop.emit(imgList.isStayOnTop())
+
+    @pyqtSlot(str)
+    def debug_log(self, message):
+        logger.info('QML %s', str(message))
+
+    @pyqtSlot(str, str, result=bool)
+    def save_window_size(self, width, height):
+        global imgList
+
+        try:
+            width_int = int(width)
+            height_int = int(height)
+        except (TypeError, ValueError):
+            print('Invalid window size: {0}x{1}'.format(width, height))
+            return False
+
+        if not imgList.setDefaultWindowSize(width_int, height_int):
+            print('Window size must be positive: {0}x{1}'.format(width_int, height_int))
+            return False
+
+        return True
+
+    @pyqtSlot(result=bool)
+    def select_image_root_path(self):
+        if self.image_source_prompt_pending:
+            return False
+
+        self.image_source_prompt_pending = True
+        return self._open_image_root_path_dialog()
 
     @pyqtSlot(str, result=bool)
     def set_image_root_path(self, path):
@@ -310,11 +498,12 @@ class Backend(QObject):
         if not imgList.setImageRootPath(path):
             return False
 
-        self.settimervalue.emit(imgList.getTimerSeconds())
-        self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
-        self.settimerendmode.emit(imgList.getTimerEndMode())
-        self.reload()
-        self.schedule_timer_start()
+        self.emit_mode_state(reload_image=True)
+        if imgList.getAppMode() == 'photo_switching':
+            self.schedule_timer_start()
+        else:
+            self.prestart_pending = False
+            self.clear_prestart_countdown()
         return True
 
     @pyqtSlot(result='QStringList')
@@ -325,36 +514,47 @@ class Backend(QObject):
     def reload(self):
         global imgList
 
-        self.setcurimage.emit(QUrl.fromLocalFile(imgList.getImagePath()).toString())
+        image_path = imgList.getImagePath()
+        if image_path:
+            self.setcurimage.emit(QUrl.fromLocalFile(image_path).toString())
+        else:
+            self.setcurimage.emit('')
         self.emit_image_view_state()
+
+    def after_image_navigation(self):
+        global imgList
+        if imgList.getAppMode() == 'photo_switching':
+            self.schedule_timer_start()
+        else:
+            self.emit_timer_visual_state(imgList.getCurTimer(False))
 
     @pyqtSlot()
     def prev_in_folder(self):
         global imgList
         imgList.change(-2)
         self.reload()
-        self.schedule_timer_start()
+        self.after_image_navigation()
 
     @pyqtSlot()
     def prev(self):
         global imgList
         imgList.change(-1)
         self.reload()
-        self.schedule_timer_start()
+        self.after_image_navigation()
 
     @pyqtSlot()
     def next(self):
         global imgList
         imgList.change(1)
         self.reload()
-        self.schedule_timer_start()
+        self.after_image_navigation()
 
     @pyqtSlot()
     def next_in_folder(self):
         global imgList
         imgList.change(2)
         self.reload()
-        self.schedule_timer_start()
+        self.after_image_navigation()
 
     @pyqtSlot()
     def pause(self):
@@ -376,6 +576,8 @@ class Backend(QObject):
     @pyqtSlot()
     def reset_timer(self):
         global imgList
+        if imgList.getAppMode() != 'photo_switching':
+            return
         imgList.resetTimer()
         self.schedule_timer_start()
         self.settimervalue.emit(imgList.getTimerSeconds())
@@ -387,7 +589,7 @@ class Backend(QObject):
             return False
 
         self.reload()
-        self.schedule_timer_start()
+        self.after_image_navigation()
         return True
 
     @pyqtSlot(result=bool)
@@ -441,6 +643,8 @@ class Backend(QObject):
     @pyqtSlot(str)
     def set_timer_value(self, seconds):
         global imgList
+        if imgList.getAppMode() != 'photo_switching':
+            return
 
         try:
             seconds_int = int(seconds)
@@ -458,6 +662,8 @@ class Backend(QObject):
     @pyqtSlot()
     def toggle_prestart_countdown_enabled(self):
         global imgList
+        if imgList.getAppMode() != 'photo_switching':
+            return
         enabled = imgList.togglePrestartCountdownEnabled()
         self.setprestartenabled.emit(enabled)
 
@@ -468,6 +674,74 @@ class Backend(QObject):
             self.prestart_pending = False
             self.clear_prestart_countdown()
             self.emit_timer_visual_state(imgList.getCurTimer(False))
+
+    @pyqtSlot(str, result=bool)
+    def set_app_mode(self, mode):
+        global imgList
+
+        changed = imgList.setAppMode(mode)
+        if not changed:
+            self.emit_mode_state(reload_image=False)
+            self.ensure_image_source_for_current_mode(async_open=True)
+            return False
+
+        self.emit_mode_state(reload_image=True)
+        if imgList.getAppMode() == 'photo_switching':
+            self.prestart_pending = imgList.isPrestartCountdownEnabled() and imgList.hasImages()
+            self.clear_prestart_countdown()
+            if not imgList.isTimerPaused():
+                self.schedule_timer_start()
+            else:
+                self.emit_timer_visual_state(imgList.getCurTimer(False))
+        else:
+            self.prestart_pending = False
+            self.clear_prestart_countdown()
+            self.emit_timer_visual_state(imgList.getCurTimer(False))
+        self.ensure_image_source_for_current_mode(async_open=True)
+        return True
+
+    @pyqtSlot(bool, result=bool)
+    def set_color_practice_enabled(self, enabled):
+        target_mode = 'color_blocks' if bool(enabled) else 'photo_switching'
+        return self.set_app_mode(target_mode)
+
+    @pyqtSlot(str, result=bool)
+    def set_color_practice_sub_mode(self, mode):
+        normalized = str(mode).strip().lower()
+        if normalized not in ('palette', 'photo'):
+            return False
+        target_mode = 'color_blocks' if normalized == 'palette' else 'color_photo'
+        return self.set_app_mode(target_mode)
+
+    @pyqtSlot(str, str, str, result=bool)
+    def set_color_practice_thresholds(self, min_luma, max_luma, min_saturation):
+        global imgList
+        changed = imgList.setColorPracticeThresholds(min_luma, max_luma, min_saturation)
+        self.color_practice_thresholds()
+        self.color_block_settings()
+        return changed
+
+    @pyqtSlot(str, result=bool)
+    def set_playback_profile(self, profile):
+        normalized = str(profile).strip().lower()
+        if normalized not in ('photo_switching', 'color_photo'):
+            return False
+        return self.set_app_mode(normalized)
+
+    @pyqtSlot(str, str, str, str, result=bool)
+    def set_color_blocks_settings(self, stripe_count, min_luma, max_luma, min_saturation):
+        global imgList
+        changed = imgList.setColorBlocksSettings(stripe_count, min_luma, max_luma, min_saturation)
+        self.color_block_settings()
+        self.color_practice_thresholds()
+        return changed
+
+    @pyqtSlot(bool, result=bool)
+    def set_color_photo_crystallize_enabled(self, enabled):
+        global imgList
+        changed = imgList.setColorPhotoCrystallizeEnabled(enabled)
+        self.color_photo_crystallize_enabled()
+        return changed
 
     @pyqtSlot()
     def toggle_play_mode(self):
@@ -482,6 +756,8 @@ class Backend(QObject):
     @pyqtSlot(str)
     def set_timer_end_mode(self, mode):
         global imgList
+        if imgList.getAppMode() != 'photo_switching':
+            return
         advanced = imgList.setTimerEndMode(mode)
         self.settimerendmode.emit(imgList.getTimerEndMode())
         if advanced:
@@ -558,6 +834,82 @@ class Backend(QObject):
         app.clipboard().setImage(image)
         return True
 
+    @pyqtSlot(str, str, str, result=bool)
+    def copy_color_patch(self, color_hex, width, height):
+        if not color_hex:
+            return False
+
+        q_color = QColor(str(color_hex))
+        if not q_color.isValid():
+            return False
+
+        try:
+            w = int(width)
+            h = int(height)
+        except (TypeError, ValueError):
+            w = 512
+            h = 512
+
+        w = max(1, w)
+        h = max(1, h)
+
+        if hasattr(QImage, 'Format'):
+            image = QImage(w, h, QImage.Format.Format_RGB32)
+        else:
+            image = QImage(w, h, QImage.Format_RGB32)
+        image.fill(q_color.rgb())
+
+        app.clipboard().setImage(image)
+        return True
+
+    @pyqtSlot(str, str, str, result=bool)
+    def copy_color_stripes(self, colors_json, width, height):
+        if not colors_json:
+            return False
+
+        try:
+            parsed = json.loads(str(colors_json))
+        except ValueError:
+            return False
+
+        if not isinstance(parsed, list) or len(parsed) == 0:
+            return False
+
+        q_colors = []
+        for value in parsed:
+            q_color = QColor(str(value))
+            if not q_color.isValid():
+                return False
+            q_colors.append(q_color)
+
+        try:
+            w = int(width)
+            h = int(height)
+        except (TypeError, ValueError):
+            w = 512
+            h = 512
+
+        w = max(1, w)
+        h = max(1, h)
+
+        if hasattr(QImage, 'Format'):
+            image = QImage(w, h, QImage.Format.Format_RGB32)
+        else:
+            image = QImage(w, h, QImage.Format_RGB32)
+
+        painter = QPainter(image)
+        try:
+            total = len(q_colors)
+            for idx, q_color in enumerate(q_colors):
+                x0 = int(idx * w / total)
+                x1 = int((idx + 1) * w / total)
+                painter.fillRect(x0, 0, max(1, x1 - x0), h, q_color)
+        finally:
+            painter.end()
+
+        app.clipboard().setImage(image)
+        return True
+
     @pyqtSlot(result=str)
     def allocate_temp_capture_path(self):
         temp_dir = tempfile.gettempdir()
@@ -584,18 +936,16 @@ engine.rootObjects()[0].setProperty('backend', backend)
 
 # apply window size from command line
 backend.windowsize()
-backend.play_mode()
-backend.timer_value()
 backend.stay_on_top()
-backend.timer_end_mode()
-backend.prestart_countdown_enabled()
+backend.emit_mode_state(reload_image=False)
 backend.emit_global_flip_state()
 
-if imgList.hasImages():
+if imgList.getAppMode() in ('photo_switching', 'color_photo') and imgList.hasImages():
     backend.initialize_current_image()
 
 # start in paused mode; click timer once to begin playback
-backend.pause()
+if imgList.getAppMode() == 'photo_switching':
+    backend.pause()
 
 
 def save_session_state():
@@ -604,16 +954,6 @@ def save_session_state():
 
 
 app.aboutToQuit.connect(save_session_state)
-
-def prompt_for_image_folder_if_needed():
-    if imgList.hasImages():
-        return
-
-    print('Opening image folder picker...')
-    backend.select_image_root_path()
-
-
-# Run folder picker after UI is shown to avoid startup freeze/hang.
-QTimer.singleShot(0, prompt_for_image_folder_if_needed)
+QTimer.singleShot(0, lambda: backend.ensure_image_source_for_current_mode(async_open=True))
 
 sys.exit(app.exec())
