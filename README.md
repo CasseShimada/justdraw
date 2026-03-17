@@ -402,6 +402,7 @@ py -3 build_exe.py
 - `main.qml`
 - `images/`
 - the detected Qt package (`PyQt6` preferred, `PyQt5` fallback)
+- the current Python interpreter environment that launched `build_exe.py`
 
 ### GitHub Actions Build
 

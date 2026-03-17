@@ -1,6 +1,5 @@
 import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 
@@ -24,10 +23,9 @@ def main():
         print('  py -3 -m pip install PyQt5')
         return 1
 
-    if sys.platform.startswith('win') and shutil.which('py'):
-        pyinstaller_cmd = ['py', '-3', '-m', 'PyInstaller']
-    else:
-        pyinstaller_cmd = [sys.executable, '-m', 'PyInstaller']
+    # Use the current interpreter so CI and local builds resolve PyInstaller
+    # from the same environment that launched this script.
+    pyinstaller_cmd = [sys.executable, '-m', 'PyInstaller']
 
     pyinstaller_cmd.extend([
         '--noconfirm',
