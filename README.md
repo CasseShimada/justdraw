@@ -413,6 +413,7 @@ Behavior:
 - release build: push a tag like `v1.2.0`
 - prerelease build: push a tag like `v1.0.0-beta.1` or `v1.0.0-rc.1`
 - uses `windows-latest`
+- uses Python `3.12`
 - installs `pyinstaller`, `PyQt6`, and `Pillow`
 - uploads:
   - `dist/JustDraw.exe`
