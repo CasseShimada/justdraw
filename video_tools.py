@@ -5,6 +5,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFilter = None
+    ImageFont = None
+
 
 def clamp(value, low, high):
     return max(low, min(high, value))
@@ -276,6 +284,18 @@ def even_size(width, height):
     return max(out_width, 2), max(out_height, 2)
 
 
+def find_font(preferred_size):
+    font_path = find_font_path()
+    if ImageFont is None:
+        return None
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, preferred_size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
 def find_font_path():
     candidates = [
         'C:/Windows/Fonts/arial.ttf',
@@ -306,6 +326,33 @@ def _escape_drawtext_value(value):
 
 
 def generate_text_watermark(path, text, width, height, ffmpeg_path, logger=None):
+    if Image is not None and ImageDraw is not None and ImageFilter is not None and ImageFont is not None:
+        canvas_width = max(320, int(width * 0.72))
+        canvas_height = max(140, int(height * 0.24))
+        canvas = Image.new('RGBA', (canvas_width, canvas_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+        font = find_font(max(28, int(min(width, height) * 0.09)))
+        bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=8)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        origin = (
+            (canvas_width - text_width) / 2.0,
+            (canvas_height - text_height) / 2.0,
+        )
+        draw.multiline_text(
+            origin,
+            text,
+            font=font,
+            spacing=8,
+            align='center',
+            fill=(255, 255, 255, 255),
+            stroke_width=max(1, int(min(width, height) * 0.004)),
+            stroke_fill=(0, 0, 0, 180),
+        )
+        softened = canvas.filter(ImageFilter.GaussianBlur(radius=0.6))
+        softened.save(path, 'PNG')
+        return
+
     canvas_width = max(320, int(width * 0.72))
     canvas_height = max(140, int(height * 0.24))
     font_size = max(28, int(min(width, height) * 0.09))
@@ -342,6 +389,15 @@ def generate_text_watermark(path, text, width, height, ffmpeg_path, logger=None)
 
 
 def generate_noise_overlay(path, width, height, ffmpeg_path, logger=None):
+    if Image is not None:
+        tile_width = max(640, width)
+        tile_height = max(640, height)
+        noise = Image.effect_noise((tile_width, tile_height), 130.0).convert('L')
+        noise = noise.filter(ImageFilter.GaussianBlur(radius=0.4))
+        rgb = Image.merge('RGB', (noise, noise, noise))
+        rgb.save(path, 'PNG')
+        return
+
     tile_width = max(640, width)
     tile_height = max(640, height)
     command = [
@@ -381,31 +437,6 @@ def build_output_path(input_path, seconds=None, processed_duration=None, output_
     return str(path_obj.parent / '{0}_out{1}'.format(path_obj.stem, extension))
 
 
-def _build_timeline(seconds, processed_duration, fps):
-    still_duration = 1.0
-    if seconds < 1:
-        still_duration = max(0.0, float(seconds))
-    outro_duration = 0.0
-    if seconds > still_duration:
-        outro_duration = min(1.0 / max(float(fps), 1.0), max(0.0, float(seconds) - still_duration))
-    main_duration = max(0.0, float(seconds) - still_duration - outro_duration)
-    still_frames = max(1, int(round(still_duration * fps))) if still_duration > 0 else 1
-    still_loops = max(0, still_frames - 1)
-    outro_frames = max(1, int(round(outro_duration * fps))) if outro_duration > 0 else 0
-    outro_loops = max(0, outro_frames - 1) if outro_frames > 0 else 0
-    pts_factor = 1.0
-    if main_duration > 0:
-        pts_factor = main_duration / max(float(processed_duration), 0.001)
-    return {
-        'still_duration': still_duration,
-        'main_duration': main_duration,
-        'outro_duration': outro_duration,
-        'still_loops': still_loops,
-        'outro_loops': outro_loops,
-        'pts_factor': pts_factor,
-    }
-
-
 def build_filter_complex(
     seconds,
     processed_duration,
@@ -418,54 +449,43 @@ def build_filter_complex(
     include_watermark,
 ):
     filters = []
-    timeline = _build_timeline(seconds, processed_duration, fps)
+    still_duration = 1.0
+    if seconds < 2:
+        still_duration = max(0.0, float(seconds) / 2.0)
+    main_duration = max(0.0, float(seconds) - (2.0 * still_duration))
+    still_frames = max(1, int(round(still_duration * fps))) if still_duration > 0 else 1
+    still_loops = max(0, still_frames - 1)
+    pts_factor = 1.0
     input_index = 2
+
     filters.append(
         '[1:v]'
         'reverse,'
         'trim=end_frame=1,'
-        'loop=loop={0}:size=1:start=0,'.format(timeline['still_loops']) +
+        'loop=loop={0}:size=1:start=0,'.format(still_loops) +
         'setpts=N/({0}*TB),'.format(fps) +
         'fps={0},'.format(fps) +
         'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
         'setsar=1,'
         'format=rgba,'
-        'trim=duration={0:.6f}[intro]'.format(timeline['still_duration'])
+        'trim=duration={0:.6f}[still]'.format(still_duration)
     )
+    filters.append('[still]split=2[intro][outro]')
 
-    if timeline['outro_duration'] > 0:
-        filters.append(
-            '[1:v]'
-            'reverse,'
-            'trim=end_frame=1,'
-            'loop=loop={0}:size=1:start=0,'.format(timeline['outro_loops']) +
-            'setpts=N/({0}*TB),'.format(fps) +
-            'fps={0},'.format(fps) +
-            'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
-            'setsar=1,'
-            'format=rgba,'
-            'trim=duration={0:.6f}[outro]'.format(timeline['outro_duration'])
-        )
-
-    if timeline['main_duration'] > 0:
+    if main_duration > 0:
+        pts_factor = main_duration / max(float(processed_duration), 0.001)
         filters.append(
             '[0:v]'
-            'setpts={0:.10f}*(PTS-STARTPTS),'.format(timeline['pts_factor']) +
+            'setpts={0:.10f}*(PTS-STARTPTS),'.format(pts_factor) +
             'fps={0},'.format(fps) +
             'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
             'setsar=1,'
             'format=rgba,'
-            'trim=duration={0:.6f}[main]'.format(timeline['main_duration'])
+            'trim=duration={0:.6f}[main]'.format(main_duration)
         )
-        if timeline['outro_duration'] > 0:
-            filters.append('[intro][main][outro]concat=n=3:v=1:a=0[base0]')
-        else:
-            filters.append('[intro][main]concat=n=2:v=1:a=0[base0]')
+        filters.append('[intro][main][outro]concat=n=3:v=1:a=0[base0]')
     else:
-        if timeline['outro_duration'] > 0:
-            filters.append('[intro][outro]concat=n=2:v=1:a=0[base0]')
-        else:
-            filters.append('[intro]null[base0]')
+        filters.append('[intro][outro]concat=n=2:v=1:a=0[base0]')
 
     current = 'base0'
     filters.append('[{0}]unsharp=5:5:0.25:5:5:0.0[base_sharp]'.format(current))
@@ -493,7 +513,13 @@ def build_filter_complex(
     else:
         filters.append('[{0}]null[v]'.format(current))
 
-    return ';'.join(filters), timeline
+    return ';'.join(filters), {
+        'still_duration': still_duration,
+        'main_duration': main_duration,
+        'outro_duration': still_duration,
+        'still_loops': still_loops,
+        'pts_factor': pts_factor,
+    }
 
 
 def create_static_assets(width, height, paths, watermark_image, watermark_text, overlay_mode, ffmpeg_path, logger=None):

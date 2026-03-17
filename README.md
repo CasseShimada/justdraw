@@ -258,8 +258,8 @@ Export pipeline:
 - uses the `video-generator`-style protected export flow
 - removes duplicate frames from the source first
 - outputs an auto-named file like `source_HHMMSS_15s.mp4` or `source_HHMMSS_15s.gif`
-- creates a 1-second intro hold before the accelerated main content
-- shows the final frame once at the very end
+- creates matching intro/outro still holds around the accelerated main content
+- uses 1-second intro/outro holds when the target duration is at least 2 seconds
 - applies watermark before the intro-to-main transition
 - supports centered watermark text or watermark image
 - supports optional noise overlay

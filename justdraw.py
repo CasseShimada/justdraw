@@ -247,8 +247,8 @@ class ProtectedVideoExportDialog(QDialog):
         layout.addWidget(title_label)
 
         info_label = QLabel(
-            'Matches video-generator: exact target duration with a 1-second intro hold '
-            'before the accelerated main content, then shows the final frame once at the end.'
+            'Matches video-generator: exact target duration with 1-second intro/outro holds '
+            'around the accelerated main content.'
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
