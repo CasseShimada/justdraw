@@ -328,11 +328,13 @@ ApplicationWindow {
     }
 
     function returnFocusToApp() {
-        if (root.contentItem && root.contentItem.forceActiveFocus) {
-            root.contentItem.forceActiveFocus();
+        if (focusProxy && focusProxy.forceActiveFocus) {
+            focusProxy.forceActiveFocus();
             return;
         }
-        focusProxy.forceActiveFocus();
+        if (root.contentItem && root.contentItem.forceActiveFocus) {
+            root.contentItem.forceActiveFocus();
+        }
     }
 
     function isTopMenuTitleVisible(title) {
@@ -907,6 +909,7 @@ ApplicationWindow {
         modeMenu.close();
         timerMenu.close();
         timerEndModeMenu.close();
+        windowMenu.close();
         colorSenseToolsMenu.close();
     }
 
@@ -1268,10 +1271,11 @@ ApplicationWindow {
     }
 
     function exportProtectedShortVideoAction() {
-        if (!backend || !protectedVideoExportAvailable || protectedVideoExportBusy) {
+        if (!backend || !protectedVideoExportAvailable) {
             return;
         }
 
+        closeTopMenus();
         backend.export_protected_short_video();
     }
 
@@ -1389,17 +1393,6 @@ ApplicationWindow {
             }
 
             CompactMenuItem {
-                visible: protectedVideoExportAvailable
-                enabled: !protectedVideoExportBusy
-                text: protectedVideoExportBusy
-                    ? "Export Protected Short Video... (Busy)"
-                    : "Export Protected Short Video..."
-                onTriggered: exportProtectedShortVideoAction()
-            }
-
-            MenuSeparator {}
-
-            CompactMenuItem {
                 text: "Delete Path Playback State..."
                 onTriggered: deletePathPlaybackStateAction()
             }
@@ -1412,6 +1405,54 @@ ApplicationWindow {
             CompactMenuItem {
                 text: "Reset Current Path Image States"
                 onTriggered: resetCurrentPathImageStatesAction()
+            }
+        }
+
+        Menu {
+            id: windowMenu
+            title: "Window"
+            popupType: Popup.Item
+            implicitWidth: 248
+            width: implicitWidth
+            delegate: compactMenuItemDelegate
+            padding: 0
+            topPadding: 0
+            bottomPadding: 0
+            leftPadding: 0
+            rightPadding: 0
+            font.pixelSize: uiMetrics.menuFontSize
+            palette.text: "#f2f2f2"
+            palette.buttonText: "#f2f2f2"
+            palette.windowText: "#f2f2f2"
+            palette.highlight: "#3a3a3a"
+            palette.highlightedText: "#f2f2f2"
+            background: Rectangle {
+                color: "#202020"
+                border.color: "#5a5a5a"
+                border.width: 1
+                radius: 6
+            }
+            onAboutToShow: debugLog("windowMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")")
+            onAboutToHide: debugLog("windowMenu aboutToHide")
+
+            CompactMenuItem {
+                visible: protectedVideoExportAvailable
+                enabled: protectedVideoExportAvailable
+                text: protectedVideoExportBusy ? "Protected Video Export... (Busy)" : "Protected Video Export..."
+                onTriggered: exportProtectedShortVideoAction()
+            }
+
+            CompactMenuItem {
+                visible: !protectedVideoExportAvailable
+                enabled: false
+                text: "Protected Video Export Unavailable"
+            }
+
+            MenuSeparator {}
+
+            CompactMenuItem {
+                text: (stayOnTop ? "✓ " : "") + "Stay On Top"
+                onTriggered: toggleStayOnTopAction()
             }
         }
 
@@ -2171,6 +2212,7 @@ ApplicationWindow {
         refreshRecentImagePaths();
         syncTopMenus();
         Qt.callLater(function() {
+            closeTopMenus();
             returnFocusToApp();
         });
     }
@@ -2988,7 +3030,6 @@ ApplicationWindow {
             }
 
         }
-
         Popup {
             id: timerEditPopup
             parent: Overlay.overlay

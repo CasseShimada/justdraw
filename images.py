@@ -32,6 +32,7 @@ default_color_practice_min_luma = 0.22
 default_color_practice_max_luma = 0.82
 default_color_practice_min_saturation = 0.35
 default_color_blocks_shape_mode_enabled = False
+default_protected_video_export_duration_seconds = 15
 playback_state_file_name = 'justdraw_playback_state.json'
 
 timer_end_mode_auto_next = 'auto_next'
@@ -80,6 +81,7 @@ class ImageList:
         self.playback_states = {}
         self.app_mode = app_mode_photo_switching
         self.mode_states = self._default_mode_states()
+        self.protected_video_export_state = self._default_protected_video_export_state()
         self.playback_profile = default_playback_profile
         self.random_play_mode = False
         self.stay_on_top = default_stay_on_top
@@ -197,6 +199,16 @@ class ImageList:
                 'random_play_mode': False,
                 'crystallize_enabled': False,
             },
+        }
+
+    def _default_protected_video_export_state(self):
+        return {
+            'input_path': '',
+            'duration_seconds': default_protected_video_export_duration_seconds,
+            'overlay_mode': 'noise',
+            'watermark_mode': 'text',
+            'watermark_text': '',
+            'watermark_path': '',
         }
 
     def _active_playback_profile(self):
@@ -416,6 +428,32 @@ class ImageList:
             data.get('global_flip_vertical', data.get('flip_vertical', False)),
             False
         )
+        protected_video_state = data.get('protected_video_export')
+        self.protected_video_export_state = self._default_protected_video_export_state()
+        if isinstance(protected_video_state, dict):
+            self.protected_video_export_state['input_path'] = str(
+                protected_video_state.get('input_path', '')
+            ).strip()
+            try:
+                duration_seconds = int(
+                    protected_video_state.get(
+                        'duration_seconds',
+                        default_protected_video_export_duration_seconds
+                    )
+                )
+            except (TypeError, ValueError):
+                duration_seconds = default_protected_video_export_duration_seconds
+            self.protected_video_export_state['duration_seconds'] = max(1, duration_seconds)
+            overlay_mode = str(protected_video_state.get('overlay_mode', 'noise')).strip().lower()
+            self.protected_video_export_state['overlay_mode'] = 'off' if overlay_mode == 'off' else 'noise'
+            watermark_mode = str(protected_video_state.get('watermark_mode', 'text')).strip().lower()
+            self.protected_video_export_state['watermark_mode'] = 'image' if watermark_mode == 'image' else 'text'
+            self.protected_video_export_state['watermark_text'] = str(
+                protected_video_state.get('watermark_text', '')
+            ).strip()
+            self.protected_video_export_state['watermark_path'] = str(
+                protected_video_state.get('watermark_path', '')
+            ).strip()
         self._apply_mode_state_to_runtime()
 
     def saveConfig(self):
@@ -461,6 +499,7 @@ class ImageList:
             'last_image_path': str(photo_mode.get('last_image_path', '')).strip(),
             'global_flip_horizontal': self.global_flip_horizontal,
             'global_flip_vertical': self.global_flip_vertical,
+            'protected_video_export': self.getProtectedVideoExportState(),
         }
 
         try:
@@ -513,6 +552,40 @@ class ImageList:
 
         return changed
 
+    def getProtectedVideoExportState(self):
+        state = self._default_protected_video_export_state()
+        state.update(self.protected_video_export_state)
+
+        try:
+            duration_seconds = int(state.get('duration_seconds', default_protected_video_export_duration_seconds))
+        except (TypeError, ValueError):
+            duration_seconds = default_protected_video_export_duration_seconds
+        state['duration_seconds'] = max(1, duration_seconds)
+        state['input_path'] = str(state.get('input_path', '')).strip()
+        overlay_mode = str(state.get('overlay_mode', 'noise')).strip().lower()
+        state['overlay_mode'] = 'off' if overlay_mode == 'off' else 'noise'
+        watermark_mode = str(state.get('watermark_mode', 'text')).strip().lower()
+        state['watermark_mode'] = 'image' if watermark_mode == 'image' else 'text'
+        state['watermark_text'] = str(state.get('watermark_text', '')).strip()
+        state['watermark_path'] = str(state.get('watermark_path', '')).strip()
+        return state
+
+    def setProtectedVideoExportState(self, state):
+        if not isinstance(state, dict):
+            return False
+
+        previous = self.getProtectedVideoExportState()
+        updated = self.getProtectedVideoExportState()
+        for key in updated.keys():
+            if key in state:
+                updated[key] = state[key]
+
+        self.protected_video_export_state = updated
+        changed = self.getProtectedVideoExportState() != previous
+        if changed:
+            self.saveConfig()
+        return changed
+
     def savePlaybackState(self):
         data = {
             'paths': self.playback_states,
@@ -547,12 +620,83 @@ class ImageList:
 
         return state
 
+    def _get_item_resume_key(self, item):
+        if item is None:
+            return ''
+
+        try:
+            if hasattr(item, 'get_resume_key'):
+                return str(item.get_resume_key()).strip()
+            return self._path_key(item.get_path())
+        except Exception:
+            return ''
+
+    def _serialize_current_image_order(self):
+        ordered_keys = []
+        seen = set()
+        for item in self.img_list:
+            key = self._get_item_resume_key(item)
+            if key == '' or key in seen:
+                continue
+            seen.add(key)
+            ordered_keys.append(key)
+        return ordered_keys
+
+    def _restore_saved_image_order_for_current_path(self):
+        key = self._get_path_playback_key()
+        if key == '' or len(self.img_list) == 0:
+            return False
+
+        state = self.playback_states.get(key)
+        if not isinstance(state, dict):
+            return False
+
+        saved_order = state.get('image_order')
+        if not isinstance(saved_order, list) or len(saved_order) == 0:
+            return False
+
+        items_by_key = {}
+        for item in self.img_list:
+            item_key = self._get_item_resume_key(item)
+            if item_key != '' and item_key not in items_by_key:
+                items_by_key[item_key] = item
+
+        restored = []
+        used_keys = set()
+        for raw_key in saved_order:
+            item_key = str(raw_key).strip()
+            if item_key == '' or item_key in used_keys:
+                continue
+            item = items_by_key.get(item_key)
+            if item is None:
+                continue
+            restored.append(item)
+            used_keys.add(item_key)
+
+        if len(restored) == 0:
+            return False
+
+        for item in self.img_list:
+            item_key = self._get_item_resume_key(item)
+            if item_key in used_keys:
+                continue
+            restored.append(item)
+            if item_key != '':
+                used_keys.add(item_key)
+
+        if len(restored) != len(self.img_list):
+            return False
+
+        self.img_list = restored
+        return True
+
     def _capture_current_path_playback_state(self, save_to_disk=False):
         state = self._ensure_current_path_playback_state()
         if state is None:
             return False
 
         state['last_image_path'] = self.cur_image_path if self.cur_image_path else self.last_image_path
+        state['image_order'] = self._serialize_current_image_order()
         state['random_play_mode'] = self.random_play_mode
         state['timer_seconds'] = self.max_timer_value
         state['timer_end_mode'] = self.timer_end_mode
@@ -837,8 +981,8 @@ class ImageList:
         self.img_list = new_img_list
         self.last_image_path = ''
         self.applyPlaybackStateForCurrentPath()
-
-        if self.random_play_mode:
+        restored_saved_order = self._restore_saved_image_order_for_current_path()
+        if self.random_play_mode and not restored_saved_order:
             self.shuffle_cycle()
 
         self.cur_img_index = -1
@@ -846,8 +990,9 @@ class ImageList:
         self.cur_timer = 0
         self.timer_expired_hold = False
         self.timer_overtime_seconds = 0
-        self.restoreLastImagePosition()
-        self.change(1)
+        restored_last_image = self.restoreLastImagePosition()
+        if not restored_last_image:
+            self.change(1)
 
         if was_paused and not self.timer_paused:
             self.pause()
@@ -935,11 +1080,10 @@ class ImageList:
         target_key = self._path_key(self.last_image_path)
         for index, item in enumerate(self.img_list):
             if self._path_key(item.get_path()) == target_key:
-                # Startup image is produced by change(1), so offset by one step.
-                self.cur_img_index = index - 1
+                self.cur_img_index = -1
                 self.cur_image_path = ''
-                self.cur_timer = 0
-                return True
+                self.cur_timer = self.max_timer_value
+                return self._setCurrentImageByIndex(index)
 
         # Image was removed or moved since last run.
         self.last_image_path = ''
@@ -996,7 +1140,8 @@ class ImageList:
         self.applyPlaybackStateForCurrentPath()
 
         # randomize first cycle order in random mode
-        if self.random_play_mode:
+        restored_saved_order = self._restore_saved_image_order_for_current_path()
+        if self.random_play_mode and not restored_saved_order:
             self.shuffle_cycle()
 
         self.restoreLastImagePosition()
@@ -1490,6 +1635,9 @@ class ImagePath:
     def get_path(self):
         return self.img_path
 
+    def get_resume_key(self):
+        return 'file::{0}'.format(self.parent._path_key(self.img_path))
+
     def get_folder(self):
         return Path(self.img_path).parent
 
@@ -1555,7 +1703,13 @@ class ImagePathInZip(ImagePath):
             # save path to temp directory in list
             self.real_path_to_img = join(self.temp_path, self.img_path)
 
-            return self.real_path_to_img
+        return self.real_path_to_img
+
+    def get_resume_key(self):
+        return 'zip::{0}::{1}'.format(
+            self.parent._path_key(self.zip_path),
+            str(self.img_path or '').strip()
+        )
 
 
 def is_file_valid(file_name, extensions):

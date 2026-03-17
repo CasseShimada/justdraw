@@ -136,6 +136,93 @@ def _run_command(command, logger=None, check=True):
     return completed
 
 
+def _run_ffmpeg_command(
+    command,
+    logger=None,
+    check=True,
+    progress_callback=None,
+    progress_start=0.0,
+    progress_end=100.0,
+    progress_stage='',
+    progress_detail='',
+    total_duration=None,
+):
+    if progress_callback is None or total_duration is None or float(total_duration) <= 0:
+        return _run_command(command, logger=logger, check=check)
+
+    progress_command = list(command)
+    progress_command[1:1] = ['-progress', 'pipe:2', '-nostats']
+    if logger is not None:
+        logger('Running command: {0}'.format(_command_to_log_string(progress_command)))
+
+    process = subprocess.Popen(
+        progress_command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1
+    )
+
+    stderr_lines = []
+    last_progress_value = None
+    total_seconds = max(float(total_duration), 0.001)
+
+    try:
+        while True:
+            line = process.stderr.readline()
+            if line == '' and process.poll() is not None:
+                break
+            if line == '':
+                continue
+
+            stderr_lines.append(line)
+            stripped = line.strip()
+            if logger is not None and stripped:
+                logger('stderr: {0}'.format(stripped))
+
+            if not stripped.startswith('out_time_ms='):
+                continue
+
+            try:
+                out_time_ms = int(stripped.split('=', 1)[1])
+            except (TypeError, ValueError):
+                continue
+
+            fraction = clamp((out_time_ms / 1000000.0) / total_seconds, 0.0, 1.0)
+            progress_value = progress_start + ((progress_end - progress_start) * fraction)
+            progress_int = int(round(progress_value))
+            if progress_int == last_progress_value:
+                continue
+
+            last_progress_value = progress_int
+            progress_callback(progress_int, progress_stage, progress_detail)
+    finally:
+        stderr_output = ''.join(stderr_lines)
+        return_code = process.wait()
+
+    if progress_callback is not None and return_code == 0:
+        progress_callback(int(round(progress_end)), progress_stage, progress_detail)
+
+    if check and return_code != 0:
+        raise RuntimeError(
+            'Command failed with exit code {0}: {1}\nstderr:\n{2}'.format(
+                return_code,
+                _command_to_log_string(progress_command),
+                stderr_output.strip()
+            )
+        )
+
+    class Completed(object):
+        def __init__(self, stderr_text, code):
+            self.stdout = ''
+            self.stderr = stderr_text
+            self.returncode = code
+
+    return Completed(stderr_output, return_code)
+
+
 def ffprobe_json(ffprobe_path, input_path):
     command = [
         ffprobe_path,
@@ -319,7 +406,48 @@ def build_filter_complex(
     filters = []
     timeline = _build_timeline(seconds, processed_duration, fps)
     input_index = 2
+    transition_duration = 0.0
+    if timeline['main_duration'] > 0 and timeline['still_duration'] > 0:
+        transition_duration = min(
+            0.3,
+            float(timeline['still_duration']) * 2.0,
+            float(timeline['main_duration']) * 2.0
+        )
+    half_transition = transition_duration / 2.0
+    intro_tail_filter = ''
+    main_head_filter = ''
+    if half_transition > 0:
+        intro_tail_start = max(float(timeline['still_duration']) - half_transition, 0.0)
+        intro_tail_filter = 'fade=t=out:st={0:.6f}:d={1:.6f}:color=black,'.format(
+            intro_tail_start,
+            half_transition
+        )
+        main_head_filter = 'fade=t=in:st=0:d={0:.6f}:color=black,'.format(half_transition)
 
+    if overlay_mode == 'noise':
+        filters.append(
+            '[{0}:v]'.format(input_index) +
+            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
+            'format=rgba,'
+            'colorchannelmixer=aa={0:.3f}[noise_src]'.format(clamp(noise_opacity, 0.0, 1.0))
+        )
+        if timeline['main_duration'] > 0:
+            filters.append('[noise_src]split=3[noise_intro][noise_main][noise_outro]')
+        else:
+            filters.append('[noise_src]split=2[noise_intro][noise_outro]')
+        input_index += 1
+
+    if include_watermark:
+        filters.append(
+            '[{0}:v]'.format(input_index) +
+            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
+            'format=rgba,'
+            'colorchannelmixer=aa={0:.3f}[wm_src]'.format(clamp(watermark_opacity, 0.0, 1.0))
+        )
+        if timeline['main_duration'] > 0:
+            filters.append('[wm_src]split=3[wm_intro][wm_main][wm_outro]')
+        else:
+            filters.append('[wm_src]split=2[wm_intro][wm_outro]')
     filters.append(
         '[1:v]'
         'reverse,'
@@ -330,9 +458,13 @@ def build_filter_complex(
         'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
         'setsar=1,'
         'format=rgba,'
-        'trim=duration={0:.6f}[still]'.format(timeline['still_duration'])
+        'trim=duration={0:.6f}[still_base]'.format(timeline['still_duration'])
     )
-    filters.append('[still]split=2[intro][outro]')
+    filters.append('[still_base]split=2[intro_seed][outro_seed]')
+
+    intro_current = 'intro_seed'
+    outro_current = 'outro_seed'
+    main_current = ''
 
     if timeline['main_duration'] > 0:
         filters.append(
@@ -342,37 +474,54 @@ def build_filter_complex(
             'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
             'setsar=1,'
             'format=rgba,'
-            'trim=duration={0:.6f}[main]'.format(timeline['main_duration'])
+            'trim=duration={0:.6f}[main_seed]'.format(timeline['main_duration'])
         )
+        main_current = 'main_seed'
+
+    if overlay_mode == 'noise':
+        filters.append('[{0}][noise_intro]overlay=0:0:format=auto[intro_noise]'.format(intro_current))
+        intro_current = 'intro_noise'
+        filters.append('[{0}][noise_outro]overlay=0:0:format=auto[outro_noise]'.format(outro_current))
+        outro_current = 'outro_noise'
+        if timeline['main_duration'] > 0:
+            filters.append('[{0}][noise_main]overlay=0:0:format=auto[main_noise]'.format(main_current))
+            main_current = 'main_noise'
+
+    if include_watermark:
+        filters.append('[{0}][wm_intro]overlay=0:0:format=auto[intro_wm]'.format(intro_current))
+        intro_current = 'intro_wm'
+        filters.append('[{0}][wm_outro]overlay=0:0:format=auto[outro_wm]'.format(outro_current))
+        outro_current = 'outro_wm'
+        if timeline['main_duration'] > 0:
+            filters.append('[{0}][wm_main]overlay=0:0:format=auto[main_wm]'.format(main_current))
+            main_current = 'main_wm'
+
+    if intro_tail_filter:
+        filters.append(
+            '[{0}]'.format(intro_current) +
+            '{0}'.format(intro_tail_filter) +
+            'null[intro]'
+        )
+    else:
+        filters.append('[{0}]null[intro]'.format(intro_current))
+
+    if timeline['main_duration'] > 0:
+        if main_head_filter:
+            filters.append(
+                '[{0}]'.format(main_current) +
+                '{0}'.format(main_head_filter) +
+                'null[main]'
+            )
+        else:
+            filters.append('[{0}]null[main]'.format(main_current))
+        filters.append('[{0}]null[outro]'.format(outro_current))
         filters.append('[intro][main][outro]concat=n=3:v=1:a=0[base0]')
     else:
+        filters.append('[{0}]null[outro]'.format(outro_current))
         filters.append('[intro][outro]concat=n=2:v=1:a=0[base0]')
 
     current = 'base0'
-    filters.append('[{0}]unsharp=5:5:0.25:5:5:0.0[base_sharp]'.format(current))
-    current = 'base_sharp'
-
-    if overlay_mode == 'noise':
-        filters.append(
-            '[{0}:v]'.format(input_index) +
-            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
-            'format=rgba,'
-            'colorchannelmixer=aa={0:.3f}[noise]'.format(clamp(noise_opacity, 0.0, 1.0))
-        )
-        filters.append('[{0}][noise]overlay=0:0:format=auto[base_noise]'.format(current))
-        current = 'base_noise'
-        input_index += 1
-
-    if include_watermark:
-        filters.append(
-            '[{0}:v]'.format(input_index) +
-            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
-            'format=rgba,'
-            'colorchannelmixer=aa={0:.3f}[wm]'.format(clamp(watermark_opacity, 0.0, 1.0))
-        )
-        filters.append('[{0}][wm]overlay=0:0:format=auto[v]'.format(current))
-    else:
-        filters.append('[{0}]null[v]'.format(current))
+    filters.append('[{0}]unsharp=5:5:0.25:5:5:0.0[v]'.format(current))
 
     return ';'.join(filters), timeline
 
@@ -431,6 +580,7 @@ def export_protected_short_video(
     preset='medium',
     keep_temp=False,
     logger=None,
+    progress_callback=None,
 ):
     ffmpeg_value = str(ffmpeg_path or '').strip()
     ffprobe_value = str(ffprobe_path or '').strip()
@@ -470,9 +620,15 @@ def export_protected_short_video(
     temp_video = path_map['temp_video']
     cleanup_targets = []
 
+    def emit_progress(percent, stage, detail):
+        if progress_callback is None:
+            return
+        progress_callback(int(max(0, min(100, round(float(percent))))), stage, detail)
+
     if logger is not None:
         logger('Input: {0}'.format(input_path_obj))
         logger('Temp video: {0}'.format(temp_video))
+    emit_progress(0, 'Preparing export', input_path_obj.name)
 
     try:
         dedupe_cmd = [
@@ -489,7 +645,18 @@ def export_protected_short_video(
             '-preset', 'veryfast',
             _path_for_tool(temp_video, ffmpeg_value),
         ]
-        _run_command(dedupe_cmd, logger=logger, check=True)
+        emit_progress(5, 'Removing duplicate frames', input_path_obj.name)
+        _run_ffmpeg_command(
+            dedupe_cmd,
+            logger=logger,
+            check=True,
+            progress_callback=progress_callback,
+            progress_start=5,
+            progress_end=45,
+            progress_stage='Removing duplicate frames',
+            progress_detail=input_path_obj.name,
+            total_duration=source_meta['duration']
+        )
         cleanup_targets.append(temp_video)
 
         processed_meta = probe_video(ffprobe_value, temp_video)
@@ -505,6 +672,7 @@ def export_protected_short_video(
             if resolved_output_path.exists():
                 logger('Output file already exists and will be overwritten: {0}'.format(resolved_output_path))
 
+        emit_progress(50, 'Preparing watermark and overlays', resolved_output_path.name)
         created_assets, watermark_asset = create_static_assets(
             width=width,
             height=height,
@@ -517,6 +685,7 @@ def export_protected_short_video(
         )
         cleanup_targets.extend(created_assets)
 
+        emit_progress(60, 'Building render graph', resolved_output_path.name)
         filter_complex, timeline = build_filter_complex(
             seconds=target_seconds,
             processed_duration=processed_meta['duration'],
@@ -553,9 +722,20 @@ def export_protected_short_video(
             '-movflags', '+faststart',
             _path_for_tool(resolved_output_path, ffmpeg_value),
         ])
-        _run_command(render_cmd, logger=logger, check=True)
+        _run_ffmpeg_command(
+            render_cmd,
+            logger=logger,
+            check=True,
+            progress_callback=progress_callback,
+            progress_start=60,
+            progress_end=99,
+            progress_stage='Rendering protected video',
+            progress_detail=resolved_output_path.name,
+            total_duration=target_seconds
+        )
 
         final_meta = probe_video(ffprobe_value, resolved_output_path)
+        emit_progress(100, 'Protected video export complete', resolved_output_path.name)
         return {
             'output_path': str(resolved_output_path),
             'input_duration': float(source_meta['duration']),

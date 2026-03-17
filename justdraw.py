@@ -12,14 +12,42 @@ os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
 
 try:
     from PyQt6.QtQml import QQmlApplicationEngine
-    from PyQt6.QtGui import QColor, QFont, QImage, QIcon, QPainter
-    from PyQt6.QtCore import QTimer, QObject, QRectF, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
-    from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog
+    from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
+    from PyQt6.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QComboBox,
+        QDialog,
+        QFileDialog,
+        QHBoxLayout,
+        QInputDialog,
+        QLabel,
+        QLineEdit,
+        QPushButton,
+        QProgressBar,
+        QSpinBox,
+        QVBoxLayout,
+        QWidget,
+    )
 except ImportError:
     from PyQt5.QtQml import QQmlApplicationEngine
-    from PyQt5.QtGui import QColor, QFont, QImage, QIcon, QPainter
-    from PyQt5.QtCore import QTimer, QObject, QRectF, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
-    from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog
+    from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
+    from PyQt5.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QComboBox,
+        QDialog,
+        QFileDialog,
+        QHBoxLayout,
+        QInputDialog,
+        QLabel,
+        QLineEdit,
+        QPushButton,
+        QProgressBar,
+        QSpinBox,
+        QVBoxLayout,
+        QWidget,
+    )
 
 from images import ImageList
 import video_tools
@@ -111,6 +139,299 @@ if hasattr(engine, 'warnings'):
         logger.exception('Failed to attach QML warning logger')
 
 
+def _qt_window_flag():
+    return Qt.WindowType.Window if hasattr(Qt, 'WindowType') else Qt.Window
+
+
+def _qt_window_stays_on_top_hint():
+    return Qt.WindowType.WindowStaysOnTopHint if hasattr(Qt, 'WindowType') else Qt.WindowStaysOnTopHint
+
+
+def _qt_non_modal():
+    return Qt.WindowModality.NonModal if hasattr(Qt, 'WindowModality') else Qt.NonModal
+
+
+class ProtectedVideoExportDialog(QDialog):
+    def __init__(self, backend):
+        super().__init__(None)
+        self.backend = backend
+        self._stay_on_top = False
+        self._export_busy = False
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setWindowTitle('Protected Video Export')
+        self.setModal(False)
+        self.setWindowModality(_qt_non_modal())
+        self.resize(500, 300)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel('Protected Video Export')
+        title_label.setStyleSheet('font-weight: bold; font-size: 15px;')
+        layout.addWidget(title_label)
+
+        info_label = QLabel(
+            'Matches video-generator: exact target duration with a 1-second intro hold and '
+            'a 1-second outro hold when the duration allows it.'
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+        self.input_path_edit = QLineEdit()
+        self.input_path_edit.setPlaceholderText('Source video path')
+        self.input_browse_button = QPushButton('Browse...')
+        self.input_browse_button.clicked.connect(self._browse_input_path)
+        input_row.addWidget(self.input_path_edit, 1)
+        input_row.addWidget(self.input_browse_button)
+        layout.addLayout(input_row)
+
+        options_row = QHBoxLayout()
+        options_row.setSpacing(8)
+        self.duration_spin = QSpinBox()
+        self.duration_spin.setRange(1, 86400)
+        self.duration_spin.setPrefix('Seconds: ')
+        self.duration_spin.setValue(15)
+        self.overlay_combo = QComboBox()
+        self.overlay_combo.addItem('Noise Overlay', 'noise')
+        self.overlay_combo.addItem('No Overlay', 'off')
+        options_row.addWidget(self.duration_spin)
+        options_row.addWidget(self.overlay_combo, 1)
+        layout.addLayout(options_row)
+
+        self.watermark_mode_combo = QComboBox()
+        self.watermark_mode_combo.addItem('Text Watermark', 'text')
+        self.watermark_mode_combo.addItem('Image Watermark', 'image')
+        self.watermark_mode_combo.currentIndexChanged.connect(self._sync_watermark_mode)
+        layout.addWidget(self.watermark_mode_combo)
+
+        self.watermark_text_row = QWidget()
+        watermark_text_layout = QHBoxLayout(self.watermark_text_row)
+        watermark_text_layout.setContentsMargins(0, 0, 0, 0)
+        self.watermark_text_edit = QLineEdit()
+        self.watermark_text_edit.setPlaceholderText('Watermark text')
+        watermark_text_layout.addWidget(self.watermark_text_edit)
+        layout.addWidget(self.watermark_text_row)
+
+        self.watermark_path_row = QWidget()
+        watermark_path_layout = QHBoxLayout(self.watermark_path_row)
+        watermark_path_layout.setContentsMargins(0, 0, 0, 0)
+        watermark_path_layout.setSpacing(8)
+        self.watermark_path_edit = QLineEdit()
+        self.watermark_path_edit.setPlaceholderText('Watermark image path')
+        self.watermark_browse_button = QPushButton('Browse...')
+        self.watermark_browse_button.clicked.connect(self._browse_watermark_path)
+        watermark_path_layout.addWidget(self.watermark_path_edit, 1)
+        watermark_path_layout.addWidget(self.watermark_browse_button)
+        layout.addWidget(self.watermark_path_row)
+
+        self.status_label = QLabel('Output file name is generated automatically from the processed duration.')
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(8)
+        buttons_row.addStretch(1)
+        self.export_button = QPushButton('Export')
+        self.export_button.clicked.connect(self._start_export)
+        buttons_row.addWidget(self.export_button)
+        self.close_button = QPushButton('Close')
+        self.close_button.clicked.connect(self.close)
+        buttons_row.addWidget(self.close_button)
+        layout.addLayout(buttons_row)
+
+        self._sync_watermark_mode()
+
+    def _set_combo_value(self, combo_box, value):
+        index = combo_box.findData(value)
+        combo_box.setCurrentIndex(index if index >= 0 else 0)
+
+    def _sync_watermark_mode(self):
+        image_mode = self.watermark_mode_combo.currentData() == 'image'
+        self.watermark_text_row.setVisible(not image_mode)
+        self.watermark_path_row.setVisible(image_mode)
+
+    def _browse_input_path(self):
+        selected_path = self.backend.pick_protected_video_input_path(self.input_path_edit.text())
+        if selected_path:
+            self.input_path_edit.setText(selected_path)
+            self.backend.persist_protected_video_export_state(self.collect_state())
+
+    def _browse_watermark_path(self):
+        selected_path = self.backend.pick_protected_video_watermark_path(
+            self.input_path_edit.text(),
+            self.watermark_path_edit.text()
+        )
+        if selected_path:
+            self.watermark_path_edit.setText(selected_path)
+            self.backend.persist_protected_video_export_state(self.collect_state())
+
+    def _start_export(self):
+        self.backend.export_protected_short_video_with_options(
+            self.input_path_edit.text(),
+            str(self.duration_spin.value()),
+            self.overlay_combo.currentData(),
+            self.watermark_text_edit.text(),
+            self.watermark_path_edit.text(),
+        )
+
+    def collect_state(self):
+        return {
+            'input_path': self.input_path_edit.text().strip(),
+            'duration_seconds': int(self.duration_spin.value()),
+            'overlay_mode': str(self.overlay_combo.currentData() or 'noise'),
+            'watermark_mode': str(self.watermark_mode_combo.currentData() or 'text'),
+            'watermark_text': self.watermark_text_edit.text().strip(),
+            'watermark_path': self.watermark_path_edit.text().strip(),
+        }
+
+    def apply_state(self, state):
+        data = dict(state or {})
+        self.input_path_edit.setText(str(data.get('input_path', '')).strip())
+        try:
+            duration_seconds = int(data.get('duration_seconds', 15))
+        except (TypeError, ValueError):
+            duration_seconds = 15
+        self.duration_spin.setValue(max(1, duration_seconds))
+        self._set_combo_value(self.overlay_combo, str(data.get('overlay_mode', 'noise')).strip().lower())
+        self._set_combo_value(self.watermark_mode_combo, str(data.get('watermark_mode', 'text')).strip().lower())
+        self.watermark_text_edit.setText(str(data.get('watermark_text', '')).strip())
+        self.watermark_path_edit.setText(str(data.get('watermark_path', '')).strip())
+        self._sync_watermark_mode()
+
+    def set_export_busy(self, enabled):
+        self._export_busy = bool(enabled)
+        self.input_path_edit.setEnabled(not self._export_busy)
+        self.input_browse_button.setEnabled(not self._export_busy)
+        self.duration_spin.setEnabled(not self._export_busy)
+        self.overlay_combo.setEnabled(not self._export_busy)
+        self.watermark_mode_combo.setEnabled(not self._export_busy)
+        self.watermark_text_edit.setEnabled(not self._export_busy)
+        self.watermark_path_edit.setEnabled(not self._export_busy)
+        self.watermark_browse_button.setEnabled(not self._export_busy)
+        self.export_button.setEnabled(not self._export_busy)
+        self.export_button.setText('Exporting...' if self._export_busy else 'Export')
+        if self._export_busy:
+            self.status_label.setText('Export is running in a separate progress window.')
+        else:
+            self.status_label.setText('Output file name is generated automatically from the processed duration.')
+
+    def set_stay_on_top(self, enabled):
+        enabled_value = bool(enabled)
+        if self._stay_on_top == enabled_value:
+            return
+        was_visible = self.isVisible()
+        self._stay_on_top = enabled_value
+        self.setWindowFlag(_qt_window_stays_on_top_hint(), enabled_value)
+        if was_visible:
+            self.show()
+
+    def is_stay_on_top(self):
+        return self._stay_on_top
+
+    def closeEvent(self, event):
+        self.backend.persist_protected_video_export_state(self.collect_state())
+        super().closeEvent(event)
+
+
+class ProtectedVideoExportProgressDialog(QDialog):
+    def __init__(self):
+        super().__init__(None)
+        self._stay_on_top = False
+        self._busy = False
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setWindowTitle('Protected Video Export Progress')
+        self.setModal(False)
+        self.setWindowModality(_qt_non_modal())
+        self.resize(420, 150)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        self.stage_label = QLabel('Preparing export...')
+        self.stage_label.setStyleSheet('font-weight: bold;')
+        layout.addWidget(self.stage_label)
+
+        self.detail_label = QLabel('')
+        self.detail_label.setWordWrap(True)
+        layout.addWidget(self.detail_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch(1)
+        self.close_button = QPushButton('Close')
+        self.close_button.clicked.connect(self.close)
+        buttons_row.addWidget(self.close_button)
+        layout.addLayout(buttons_row)
+
+        self._apply_busy_state(False)
+
+    def _apply_busy_state(self, enabled):
+        self._busy = bool(enabled)
+        self.close_button.setEnabled(not self._busy)
+
+    def update_progress(self, percent, stage, detail):
+        clamped = max(0, min(100, int(percent)))
+        self._apply_busy_state(True)
+        self.stage_label.setText(str(stage))
+        self.detail_label.setText(str(detail))
+        self.progress_bar.setValue(clamped)
+        was_visible = self.isVisible()
+        self.show()
+        if not was_visible:
+            self.raise_()
+            self.activateWindow()
+
+    def show_success(self, title, detail):
+        self._apply_busy_state(False)
+        self.stage_label.setText(str(title))
+        self.detail_label.setText(str(detail))
+        self.progress_bar.setValue(100)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_error(self, title, detail):
+        self._apply_busy_state(False)
+        self.stage_label.setText(str(title))
+        self.detail_label.setText(str(detail))
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def set_stay_on_top(self, enabled):
+        enabled_value = bool(enabled)
+        if self._stay_on_top == enabled_value:
+            return
+        was_visible = self.isVisible()
+        self._stay_on_top = enabled_value
+        self.setWindowFlag(_qt_window_stays_on_top_hint(), enabled_value)
+        if was_visible:
+            self.show()
+
+    def is_stay_on_top(self):
+        return self._stay_on_top
+
+    def closeEvent(self, event):
+        if self._busy:
+            event.ignore()
+            self.raise_()
+            self.activateWindow()
+            return
+        super().closeEvent(event)
+
+
 class Backend(QObject):
     # update timer value in the upper right corner
     setcurtimer = pyqtSignal(str, str, arguments=['cur_timer, color'])
@@ -187,6 +508,9 @@ class Backend(QObject):
     # set ffmpeg-based export availability/busy state
     setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
     setprotectedvideoexportbusy = pyqtSignal(bool, arguments=['enabled'])
+    videoexportbusychanged = pyqtSignal(bool)
+    videoexportprogress = pyqtSignal(int, str, str)
+    videoexportfinished = pyqtSignal(bool, str, str)
 
     # surface backend status messages to QML toast
     showtoast = pyqtSignal(str, arguments=['message'])
@@ -206,6 +530,11 @@ class Backend(QObject):
         self.video_tools = video_tools.find_ffmpeg_tools()
         self.video_export_busy = False
         self.video_export_thread = None
+        self.video_export_dialog = None
+        self.video_export_progress_dialog = None
+        self.videoexportbusychanged.connect(self._handle_video_export_busy_changed)
+        self.videoexportprogress.connect(self._handle_video_export_progress)
+        self.videoexportfinished.connect(self._handle_video_export_finished)
         logger.info(
             'Video tools detected: ffmpeg=%s ffprobe=%s available=%s reason=%s',
             self.video_tools.get('ffmpeg', ''),
@@ -414,7 +743,8 @@ class Backend(QObject):
         if not imgList.hasImages():
             return
 
-        imgList.change(1)
+        if not imgList.getImagePath():
+            imgList.change(1)
         self.reload()
         self.restart_timer_tick_phase()
         if imgList.getAppMode() == 'photo_switching':
@@ -496,15 +826,97 @@ class Backend(QObject):
     def stay_on_top(self):
         global imgList
         self.setstayontop.emit(imgList.isStayOnTop())
+        self._sync_auxiliary_window_stay_on_top()
 
     def toast(self, message):
         text = str(message)
         print(text)
         self.showtoast.emit(text)
 
+    def _iter_auxiliary_video_windows(self):
+        for window in (self.video_export_dialog, self.video_export_progress_dialog):
+            if window is not None:
+                yield window
+
+    def _sync_auxiliary_window_stay_on_top(self):
+        global imgList
+        stay_on_top = imgList.isStayOnTop()
+        for window in self._iter_auxiliary_video_windows():
+            window.set_stay_on_top(stay_on_top)
+
+    def _ensure_video_export_dialog(self):
+        if self.video_export_dialog is None:
+            self.video_export_dialog = ProtectedVideoExportDialog(self)
+            self.video_export_dialog.setWindowFlag(_qt_window_flag(), True)
+            self.video_export_dialog.set_export_busy(self.video_export_busy)
+            self._sync_auxiliary_window_stay_on_top()
+        return self.video_export_dialog
+
+    def _ensure_video_export_progress_dialog(self):
+        if self.video_export_progress_dialog is None:
+            self.video_export_progress_dialog = ProtectedVideoExportProgressDialog()
+            self.video_export_progress_dialog.setWindowFlag(_qt_window_flag(), True)
+            self._sync_auxiliary_window_stay_on_top()
+        return self.video_export_progress_dialog
+
+    def _stored_protected_video_export_state(self):
+        global imgList
+        return imgList.getProtectedVideoExportState()
+
+    def persist_protected_video_export_state(self, state):
+        global imgList
+        imgList.setProtectedVideoExportState(state)
+
+    def _show_protected_video_export_window(self):
+        dialog = self._ensure_video_export_dialog()
+        dialog.apply_state(self._stored_protected_video_export_state())
+        dialog.set_export_busy(self.video_export_busy)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @pyqtSlot(int, str, str)
+    def _handle_video_export_progress(self, percent, stage, detail):
+        progress_dialog = self._ensure_video_export_progress_dialog()
+        progress_dialog.update_progress(percent, stage, detail)
+
+    @pyqtSlot(bool)
+    def _handle_video_export_busy_changed(self, enabled):
+        if self.video_export_dialog is not None:
+            self.video_export_dialog.set_export_busy(enabled)
+
+    @pyqtSlot(bool, str, str)
+    def _handle_video_export_finished(self, success, title, detail):
+        progress_dialog = self._ensure_video_export_progress_dialog()
+        if success:
+            progress_dialog.show_success(title, detail)
+        else:
+            progress_dialog.show_error(title, detail)
+
+    def _emit_video_export_progress(self, percent, stage, detail):
+        self.videoexportprogress.emit(int(max(0, min(100, round(float(percent))))), str(stage), str(detail))
+
+    def _emit_video_export_finished(self, success, title, detail):
+        self.videoexportfinished.emit(bool(success), str(title), str(detail))
+
+    def _resolve_file_dialog_start_path(self, remembered_path='', current_path='', fallback_path=''):
+        candidates = [remembered_path, current_path, fallback_path, os.path.expanduser('~')]
+        for candidate in candidates:
+            raw_value = str(candidate or '').strip()
+            if raw_value == '':
+                continue
+            expanded = os.path.expanduser(raw_value)
+            if os.path.isfile(expanded) or os.path.isdir(expanded):
+                return expanded
+            parent_dir = os.path.dirname(expanded)
+            if parent_dir and os.path.isdir(parent_dir):
+                return parent_dir
+        return os.path.expanduser('~')
+
     def _run_with_window_not_topmost(self, callback):
         root = engine.rootObjects()[0] if len(engine.rootObjects()) > 0 else None
         was_stay_on_top = False
+        toggled_windows = []
         if root is not None:
             try:
                 was_stay_on_top = bool(root.property('stayOnTop'))
@@ -515,158 +927,58 @@ class Backend(QObject):
             root.setProperty('stayOnTop', False)
             app.processEvents()
 
+        for window in self._iter_auxiliary_video_windows():
+            if window.is_stay_on_top():
+                window.set_stay_on_top(False)
+                toggled_windows.append(window)
+
         try:
             return callback()
         finally:
+            for window in toggled_windows:
+                window.set_stay_on_top(True)
             if root is not None and was_stay_on_top:
                 root.setProperty('stayOnTop', True)
 
-    def _create_text_watermark_image(self, username):
-        text = str(username).strip()
-        if text == '':
-            raise ValueError('Username must not be empty')
+    def _build_protected_video_export_options(
+        self,
+        input_path,
+        duration_seconds,
+        overlay_mode,
+        watermark_text,
+        watermark_path,
+    ):
+        selected_path = str(input_path).strip()
+        if selected_path == '':
+            raise ValueError('Input video is required')
+        if not os.path.isfile(selected_path):
+            raise ValueError('Input video does not exist')
 
-        temp_handle = tempfile.NamedTemporaryFile(prefix='justdraw_watermark_', suffix='.png', delete=False)
-        temp_path = temp_handle.name
-        temp_handle.close()
-
-        if hasattr(QImage, 'Format'):
-            image = QImage(960, 260, QImage.Format.Format_ARGB32_Premultiplied)
-        else:
-            image = QImage(960, 260, QImage.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.transparent if hasattr(Qt, 'GlobalColor') else Qt.transparent)
-
-        painter = QPainter(image)
         try:
-            if hasattr(QPainter, 'RenderHint'):
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-            else:
-                painter.setRenderHint(QPainter.Antialiasing, True)
-                painter.setRenderHint(QPainter.TextAntialiasing, True)
+            target_duration = int(str(duration_seconds).strip())
+        except (TypeError, ValueError):
+            raise ValueError('Target duration must be a whole number of seconds')
+        if target_duration <= 0:
+            raise ValueError('Target duration must be greater than 0 seconds')
 
-            target_rect = QRectF(36.0, 28.0, 888.0, 204.0)
-            if hasattr(Qt, 'AlignmentFlag'):
-                alignment = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
-            else:
-                alignment = int(Qt.AlignCenter | Qt.TextWordWrap)
-            font_size = 54
-            while font_size >= 20:
-                font = QFont()
-                font.setBold(True)
-                font.setPixelSize(font_size)
-                painter.setFont(font)
-                bounding = painter.boundingRect(target_rect, alignment, text)
-                if bounding.width() <= target_rect.width() and bounding.height() <= target_rect.height():
-                    break
-                font_size -= 2
+        overlay_value = str(overlay_mode or 'noise').strip().lower()
+        if overlay_value not in ('noise', 'off'):
+            overlay_value = 'noise'
 
-            painter.setPen(Qt.PenStyle.NoPen if hasattr(Qt, 'PenStyle') else Qt.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 88))
-            painter.drawRoundedRect(target_rect, 18.0, 18.0)
-            painter.setPen(QColor(255, 255, 255, 206))
-            painter.drawText(target_rect, alignment, text)
-        finally:
-            painter.end()
-
-        if not image.save(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-            raise RuntimeError('Failed to save generated watermark image')
-
-        return temp_path
-
-    def _collect_protected_video_export_options(self):
-        if not self.video_tools.get('available'):
-            return None
-
-        video_filter = (
-            'Video Files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.flv *.ts *.mts *.m2ts);;'
-            'All Files (*)'
-        )
-        image_filter = 'Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)'
-
-        def pick_input():
-            return QFileDialog.getOpenFileName(
-                None,
-                'Export Protected Short Video',
-                os.path.expanduser('~'),
-                video_filter
-            )
-
-        selected_path, _ = self._run_with_window_not_topmost(pick_input)
-        if not selected_path:
-            return None
-
-        def ask_duration():
-            return QInputDialog.getInt(
-                None,
-                'Target Duration',
-                'Target total duration in seconds:',
-                30,
-                1,
-                86400,
-                1
-            )
-
-        target_duration, ok = self._run_with_window_not_topmost(ask_duration)
-        if not ok:
-            return None
-
-        overlay_items = [
-            'Noise',
-            'Off',
-        ]
-
-        def ask_overlay():
-            return QInputDialog.getItem(
-                None,
-                'Overlay Mode',
-                'Overlay mode:',
-                overlay_items,
-                0,
-                False
-            )
-
-        overlay_label, ok = self._run_with_window_not_topmost(ask_overlay)
-        if not ok:
-            return None
-
-        def pick_watermark():
-            return QFileDialog.getOpenFileName(
-                None,
-                'Optional Watermark Image (Cancel to use text watermark)',
-                os.path.dirname(selected_path) or os.path.expanduser('~'),
-                image_filter
-            )
-
-        watermark_image_path, _ = self._run_with_window_not_topmost(pick_watermark)
-        watermark_text = ''
-        if not watermark_image_path:
-            def ask_watermark_text():
-                return QInputDialog.getText(
-                    None,
-                    'Watermark Text',
-                    'Watermark text:'
-                )
-
-            watermark_text, ok = self._run_with_window_not_topmost(ask_watermark_text)
-            if not ok:
-                return None
-            watermark_text = str(watermark_text).strip()
-            if watermark_text == '':
-                self.toast('Export cancelled: watermark text is required when no watermark image is selected')
-                return None
+        watermark_image_path = str(watermark_path or '').strip()
+        watermark_text_value = str(watermark_text or '').strip()
+        if watermark_image_path != '' and not os.path.isfile(watermark_image_path):
+            raise ValueError('Watermark image does not exist')
+        if watermark_image_path == '' and watermark_text_value == '':
+            raise ValueError('Watermark text is required when no watermark image is selected')
 
         return {
             'input_path': selected_path,
             'output_path': video_tools.build_output_path(selected_path),
-            'target_duration': int(target_duration),
-            'overlay': 'noise' if str(overlay_label).strip().lower() == 'noise' else 'off',
-            'watermark_path': watermark_image_path or '',
-            'watermark_text': watermark_text,
+            'target_duration': target_duration,
+            'overlay': overlay_value,
+            'watermark_path': watermark_image_path,
+            'watermark_text': watermark_text_value,
             'cleanup_paths': [],
         }
 
@@ -676,6 +988,7 @@ class Backend(QObject):
     def _set_video_export_busy(self, enabled):
         self.video_export_busy = bool(enabled)
         self.protected_video_export_busy_state()
+        self.videoexportbusychanged.emit(self.video_export_busy)
 
     def _run_protected_video_export_worker(self, options):
         try:
@@ -689,6 +1002,7 @@ class Backend(QObject):
                 watermark_text=options.get('watermark_text', ''),
                 overlay=options.get('overlay', 'noise'),
                 logger=self._video_export_log,
+                progress_callback=self._emit_video_export_progress,
             )
             exported_output = result.get('output_path', options.get('output_path', ''))
             message = 'Protected video exported: {0}'.format(os.path.basename(exported_output))
@@ -701,9 +1015,19 @@ class Backend(QObject):
                 result.get('overlay', options.get('overlay', 'noise')),
                 result.get('watermark_mode', 'text')
             )
+            self._emit_video_export_finished(
+                True,
+                'Protected video export complete',
+                os.path.basename(exported_output)
+            )
             self.toast(message)
         except Exception as exc:
             logger.exception('Protected video export failed')
+            self._emit_video_export_finished(
+                False,
+                'Protected video export failed',
+                str(exc)
+            )
             self.toast('Protected video export failed: {0}'.format(exc))
         finally:
             for path in options.get('cleanup_paths', []):
@@ -713,6 +1037,56 @@ class Backend(QObject):
                     pass
             self._set_video_export_busy(False)
             self.video_export_thread = None
+
+    @pyqtSlot(str, result=str)
+    def pick_protected_video_input_path(self, current_path=''):
+        video_filter = (
+            'Video Files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.flv *.ts *.mts *.m2ts);;'
+            'All Files (*)'
+        )
+        saved_state = self._stored_protected_video_export_state()
+        start_path = self._resolve_file_dialog_start_path(
+            remembered_path=saved_state.get('input_path', ''),
+            current_path=current_path,
+        )
+        dialog_parent = self.video_export_dialog if self.video_export_dialog is not None and self.video_export_dialog.isVisible() else None
+
+        def pick_input():
+            return QFileDialog.getOpenFileName(
+                dialog_parent,
+                'Select Source Video',
+                start_path,
+                video_filter
+            )
+
+        selected_path, _ = self._run_with_window_not_topmost(pick_input)
+        if selected_path:
+            self.persist_protected_video_export_state({'input_path': selected_path})
+        return str(selected_path or '')
+
+    @pyqtSlot(str, str, result=str)
+    def pick_protected_video_watermark_path(self, input_path, current_path=''):
+        image_filter = 'Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)'
+        saved_state = self._stored_protected_video_export_state()
+        start_dir = self._resolve_file_dialog_start_path(
+            remembered_path=saved_state.get('watermark_path', ''),
+            current_path=current_path,
+            fallback_path=os.path.dirname(str(input_path).strip())
+        )
+        dialog_parent = self.video_export_dialog if self.video_export_dialog is not None and self.video_export_dialog.isVisible() else None
+
+        def pick_watermark():
+            return QFileDialog.getOpenFileName(
+                dialog_parent,
+                'Select Watermark Image',
+                start_dir,
+                image_filter
+            )
+
+        selected_path, _ = self._run_with_window_not_topmost(pick_watermark)
+        if selected_path:
+            self.persist_protected_video_export_state({'watermark_path': selected_path})
+        return str(selected_path or '')
 
     @pyqtSlot(str)
     def debug_log(self, message):
@@ -1008,20 +1382,43 @@ class Backend(QObject):
             reason = self.video_tools.get('missing_reason', '') or 'required tools are unavailable'
             self.toast('Protected video export is unavailable: {0}'.format(reason))
             return False
+        self._show_protected_video_export_window()
+        return True
+
+    @pyqtSlot(str, str, str, str, str, result=bool)
+    def export_protected_short_video_with_options(self, input_path, duration_seconds, overlay_mode, watermark_text, watermark_path):
+        if not self.video_tools.get('available'):
+            reason = self.video_tools.get('missing_reason', '') or 'required tools are unavailable'
+            self.toast('Protected video export is unavailable: {0}'.format(reason))
+            return False
         if self.video_export_busy:
             self.toast('Protected video export is already running')
             return False
 
         try:
-            options = self._collect_protected_video_export_options()
+            options = self._build_protected_video_export_options(
+                input_path,
+                duration_seconds,
+                overlay_mode,
+                watermark_text,
+                watermark_path,
+            )
         except Exception as exc:
-            logger.exception('Failed to collect protected video export options')
+            logger.exception('Failed to prepare protected video export options')
             self.toast('Protected video export failed: {0}'.format(exc))
             return False
-        if not options:
-            return False
 
+        self.persist_protected_video_export_state({
+            'input_path': options.get('input_path', ''),
+            'duration_seconds': options.get('target_duration', 15),
+            'overlay_mode': options.get('overlay', 'noise'),
+            'watermark_mode': 'image' if options.get('watermark_path', '') else 'text',
+            'watermark_text': options.get('watermark_text', ''),
+            'watermark_path': options.get('watermark_path', ''),
+        })
         self._set_video_export_busy(True)
+        self._emit_video_export_progress(0, 'Preparing export', 'Protected video export is starting...')
+        self._ensure_video_export_progress_dialog()
         self.toast('Protected video export started')
         self.video_export_thread = threading.Thread(
             target=self._run_protected_video_export_worker,
@@ -1040,6 +1437,7 @@ class Backend(QObject):
     def toggle_stay_on_top(self):
         global imgList
         self.setstayontop.emit(imgList.toggleStayOnTop())
+        self._sync_auxiliary_window_stay_on_top()
 
     @pyqtSlot(str)
     def set_timer_end_mode(self, mode):
