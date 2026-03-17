@@ -206,6 +206,13 @@ class Backend(QObject):
         self.video_tools = video_tools.find_ffmpeg_tools()
         self.video_export_busy = False
         self.video_export_thread = None
+        logger.info(
+            'Video tools detected: ffmpeg=%s ffprobe=%s available=%s reason=%s',
+            self.video_tools.get('ffmpeg', ''),
+            self.video_tools.get('ffprobe', ''),
+            bool(self.video_tools.get('available')),
+            self.video_tools.get('missing_reason', '')
+        )
 
     def restart_timer_tick_phase(self):
         # Ensure the next decrement happens one full interval after user-triggered resets.
@@ -597,10 +604,10 @@ class Backend(QObject):
             return QInputDialog.getInt(
                 None,
                 'Target Duration',
-                'Target total duration (15-30 seconds):',
-                20,
-                15,
+                'Target total duration in seconds:',
                 30,
+                1,
+                86400,
                 1
             )
 
@@ -608,19 +615,23 @@ class Backend(QObject):
         if not ok:
             return None
 
-        def ask_username():
-            return QInputDialog.getText(
+        overlay_items = [
+            'Noise',
+            'Off',
+        ]
+
+        def ask_overlay():
+            return QInputDialog.getItem(
                 None,
-                'Watermark Username',
-                'Username for watermark fallback:'
+                'Overlay Mode',
+                'Overlay mode:',
+                overlay_items,
+                0,
+                False
             )
 
-        username, ok = self._run_with_window_not_topmost(ask_username)
+        overlay_label, ok = self._run_with_window_not_topmost(ask_overlay)
         if not ok:
-            return None
-        username = str(username).strip()
-        if username == '':
-            self.toast('Export cancelled: username is required')
             return None
 
         def pick_watermark():
@@ -632,21 +643,31 @@ class Backend(QObject):
             )
 
         watermark_image_path, _ = self._run_with_window_not_topmost(pick_watermark)
+        watermark_text = ''
+        if not watermark_image_path:
+            def ask_watermark_text():
+                return QInputDialog.getText(
+                    None,
+                    'Watermark Text',
+                    'Watermark text:'
+                )
 
-        cleanup_paths = []
-        if watermark_image_path:
-            resolved_watermark_path = watermark_image_path
-        else:
-            resolved_watermark_path = self._create_text_watermark_image(username)
-            cleanup_paths.append(resolved_watermark_path)
+            watermark_text, ok = self._run_with_window_not_topmost(ask_watermark_text)
+            if not ok:
+                return None
+            watermark_text = str(watermark_text).strip()
+            if watermark_text == '':
+                self.toast('Export cancelled: watermark text is required when no watermark image is selected')
+                return None
 
         return {
             'input_path': selected_path,
             'output_path': video_tools.build_output_path(selected_path),
             'target_duration': int(target_duration),
-            'username': username,
-            'watermark_path': resolved_watermark_path,
-            'cleanup_paths': cleanup_paths,
+            'overlay': 'noise' if str(overlay_label).strip().lower() == 'noise' else 'off',
+            'watermark_path': watermark_image_path or '',
+            'watermark_text': watermark_text,
+            'cleanup_paths': [],
         }
 
     def _video_export_log(self, message):
@@ -662,19 +683,23 @@ class Backend(QObject):
                 ffmpeg_path=self.video_tools.get('ffmpeg', ''),
                 ffprobe_path=self.video_tools.get('ffprobe', ''),
                 input_path=options['input_path'],
-                output_path=options['output_path'],
+                output_path=options.get('output_path', ''),
                 target_total_duration=options['target_duration'],
-                watermark_path=options['watermark_path'],
+                watermark_path=options.get('watermark_path', ''),
+                watermark_text=options.get('watermark_text', ''),
+                overlay=options.get('overlay', 'noise'),
                 logger=self._video_export_log,
             )
-            message = 'Protected video exported: {0}'.format(os.path.basename(result.get('output_path', options['output_path'])))
+            exported_output = result.get('output_path', options.get('output_path', ''))
+            message = 'Protected video exported: {0}'.format(os.path.basename(exported_output))
             logger.info(
-                'Protected video export complete: input=%s output=%s final_duration=%.3f speed_factor=%.4f audio_preserved=%s',
+                'Protected video export complete: input=%s output=%s final_duration=%.3f pts_factor=%.4f overlay=%s watermark_mode=%s',
                 options['input_path'],
-                result.get('output_path', options['output_path']),
+                exported_output,
                 float(result.get('final_duration', 0.0)),
-                float(result.get('speed_factor', 1.0)),
-                bool(result.get('audio_preserved'))
+                float(result.get('pts_factor', 1.0)),
+                result.get('overlay', options.get('overlay', 'noise')),
+                result.get('watermark_mode', 'text')
             )
             self.toast(message)
         except Exception as exc:
@@ -980,6 +1005,8 @@ class Backend(QObject):
     @pyqtSlot(result=bool)
     def export_protected_short_video(self):
         if not self.video_tools.get('available'):
+            reason = self.video_tools.get('missing_reason', '') or 'required tools are unavailable'
+            self.toast('Protected video export is unavailable: {0}'.format(reason))
             return False
         if self.video_export_busy:
             self.toast('Protected video export is already running')

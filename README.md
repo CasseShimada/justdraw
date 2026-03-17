@@ -104,6 +104,11 @@ Paused timer behavior:
 
 - `Set Image Folder...`
 - `Recent Paths`
+- `Export Protected Short Video...`
+  - creates an exact-length protected timelapse from a source video
+  - output is auto-named as `source_HHMMSS_Ns.mp4`
+  - temp files use the `source_tmp.*` prefix and are cleaned up automatically
+  - supports centered watermark text or image, plus optional noise overlay
 - `Delete Path Playback State...`
 - `Refresh List Order + Random Image`
   - In random mode: reshuffles current list and jumps to a random image.
