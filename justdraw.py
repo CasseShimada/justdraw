@@ -171,12 +171,65 @@ def _qt_internal_move():
     return QAbstractItemView.InternalMove
 
 
+class ProtectedVideoInputListWidget(QListWidget):
+    filesDropped = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+
+    def _extract_video_paths(self, event):
+        mime_data = event.mimeData()
+        if mime_data is None or not mime_data.hasUrls():
+            return []
+
+        allowed_extensions = {
+            '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv', '.flv', '.ts', '.mts', '.m2ts'
+        }
+        paths = []
+        seen = set()
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path_value = str(url.toLocalFile() or '').strip()
+            if path_value == '' or path_value in seen:
+                continue
+            if not os.path.isfile(path_value):
+                continue
+            if os.path.splitext(path_value)[1].strip().lower() not in allowed_extensions:
+                continue
+            seen.add(path_value)
+            paths.append(path_value)
+        return paths
+
+    def dragEnterEvent(self, event):
+        if self._extract_video_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._extract_video_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._extract_video_paths(event)
+        if paths:
+            event.acceptProposedAction()
+            self.filesDropped.emit(paths)
+            return
+        super().dropEvent(event)
+
+
 class ProtectedVideoExportDialog(QDialog):
     def __init__(self, backend):
         super().__init__(None)
         self.backend = backend
         self._stay_on_top = False
         self._export_busy = False
+        self.setAcceptDrops(True)
         self._build_ui()
 
     def _build_ui(self):
@@ -204,11 +257,12 @@ class ProtectedVideoExportDialog(QDialog):
         source_label.setStyleSheet('font-weight: bold;')
         layout.addWidget(source_label)
 
-        self.input_list_widget = QListWidget()
+        self.input_list_widget = ProtectedVideoInputListWidget()
         self.input_list_widget.setSelectionMode(_qt_extended_selection())
         self.input_list_widget.setDragDropMode(_qt_internal_move())
         layout.addWidget(self.input_list_widget, 1)
         self.input_list_widget.model().rowsMoved.connect(self._persist_state_after_reorder)
+        self.input_list_widget.filesDropped.connect(self._append_input_paths)
 
         input_buttons_row = QHBoxLayout()
         input_buttons_row.setSpacing(8)
@@ -315,6 +369,20 @@ class ProtectedVideoExportDialog(QDialog):
             self.input_list_widget.addItem(path_value)
         self._refresh_status()
 
+    def _append_input_paths(self, paths):
+        merged_paths = self._video_paths()
+        changed = False
+        for path in paths or []:
+            path_value = str(path or '').strip()
+            if path_value == '' or path_value in merged_paths:
+                continue
+            merged_paths.append(path_value)
+            changed = True
+        if not changed:
+            return
+        self._set_video_paths(merged_paths)
+        self.backend.persist_protected_video_export_state(self.collect_state())
+
     def _persist_state_after_reorder(self, *_args):
         self._refresh_status()
         self.backend.persist_protected_video_export_state(self.collect_state())
@@ -340,12 +408,7 @@ class ProtectedVideoExportDialog(QDialog):
         selected_paths = self.backend.pick_protected_video_input_paths(self._video_paths())
         if not selected_paths:
             return
-        merged_paths = self._video_paths()
-        for path in selected_paths:
-            if path not in merged_paths:
-                merged_paths.append(path)
-        self._set_video_paths(merged_paths)
-        self.backend.persist_protected_video_export_state(self.collect_state())
+        self._append_input_paths(selected_paths)
 
     def _remove_selected_input_paths(self):
         selected_items = list(self.input_list_widget.selectedItems())
@@ -450,6 +513,26 @@ class ProtectedVideoExportDialog(QDialog):
     def closeEvent(self, event):
         self.backend.persist_protected_video_export_state(self.collect_state())
         super().closeEvent(event)
+
+    def dragEnterEvent(self, event):
+        if self.input_list_widget._extract_video_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self.input_list_widget._extract_video_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        dropped_paths = self.input_list_widget._extract_video_paths(event)
+        if dropped_paths:
+            event.acceptProposedAction()
+            self._append_input_paths(dropped_paths)
+            return
+        super().dropEvent(event)
 
 
 class ProtectedVideoExportProgressDialog(QDialog):

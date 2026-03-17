@@ -248,6 +248,7 @@ Current behavior:
 - the export progress window stays quiet in the background while rendering
 - the progress window comes to the front when export completes or fails
 - supports a reorderable multi-video queue and exports each item one by one
+- supports dragging video files into the export window to add them to the queue
 - lets you choose `mp4` or `gif` output format
 - can optionally delete each source video after its export succeeds
 - remembers the last selected source-video queue and watermark path

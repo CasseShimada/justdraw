@@ -115,6 +115,7 @@ ApplicationWindow {
     component CompactMenuItem : MenuItem {
         id: control
         property Menu presentedMenu: null
+        property int textElideMode: Text.ElideRight
         readonly property bool hasSubMenu: !!(control.subMenu || control.presentedMenu)
         implicitHeight: uiMetrics.menuItemHeight
         height: implicitHeight
@@ -137,7 +138,7 @@ ApplicationWindow {
             color: control.enabled ? "#f2f2f2" : "#777777"
             font.pixelSize: uiMetrics.menuFontSize
             verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
+            elide: control.textElideMode
         }
 
         arrow: CompactSubMenuArrow {
@@ -1378,6 +1379,7 @@ ApplicationWindow {
 
                         delegate: CompactMenuItem {
                             text: modelData
+                            textElideMode: Text.ElideMiddle
                             onTriggered: switchToRecentPath(modelData)
                         }
 
