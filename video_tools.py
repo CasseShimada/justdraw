@@ -10,6 +10,10 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def normalize_output_format(output_format):
+    return 'gif' if str(output_format or '').strip().lower() == 'gif' else 'mp4'
+
+
 def format_hhmmss(duration_seconds):
     total = max(0, int(round(float(duration_seconds))))
     hours = total // 3600
@@ -358,36 +362,46 @@ def generated_paths(input_path):
     parent = path_obj.parent
     return {
         'temp_video': parent / '{0}_tmp.mp4'.format(stem),
+        'temp_render': parent / '{0}_tmp_render.mp4'.format(stem),
         'noise': parent / '{0}_tmp_noise.png'.format(stem),
         'watermark': parent / '{0}_tmp_watermark.png'.format(stem),
     }
 
 
-def build_output_path(input_path, seconds=None, processed_duration=None):
+def build_output_path(input_path, seconds=None, processed_duration=None, output_format='mp4'):
     path_obj = Path(input_path)
+    extension = '.gif' if normalize_output_format(output_format) == 'gif' else '.mp4'
     if seconds is not None and processed_duration is not None:
-        return str(path_obj.parent / '{0}_{1}_{2}s.mp4'.format(
+        return str(path_obj.parent / '{0}_{1}_{2}s{3}'.format(
             path_obj.stem,
             format_hhmmss(processed_duration),
-            int(seconds)
+            int(seconds),
+            extension,
         ))
-    return str(path_obj.parent / '{0}_out.mp4'.format(path_obj.stem))
+    return str(path_obj.parent / '{0}_out{1}'.format(path_obj.stem, extension))
 
 
 def _build_timeline(seconds, processed_duration, fps):
     still_duration = 1.0
-    if seconds < 2:
-        still_duration = max(0.0, float(seconds) / 2.0)
-    main_duration = max(0.0, float(seconds) - (2.0 * still_duration))
+    if seconds < 1:
+        still_duration = max(0.0, float(seconds))
+    outro_duration = 0.0
+    if seconds > still_duration:
+        outro_duration = min(1.0 / max(float(fps), 1.0), max(0.0, float(seconds) - still_duration))
+    main_duration = max(0.0, float(seconds) - still_duration - outro_duration)
     still_frames = max(1, int(round(still_duration * fps))) if still_duration > 0 else 1
     still_loops = max(0, still_frames - 1)
+    outro_frames = max(1, int(round(outro_duration * fps))) if outro_duration > 0 else 0
+    outro_loops = max(0, outro_frames - 1) if outro_frames > 0 else 0
     pts_factor = 1.0
     if main_duration > 0:
         pts_factor = main_duration / max(float(processed_duration), 0.001)
     return {
         'still_duration': still_duration,
         'main_duration': main_duration,
+        'outro_duration': outro_duration,
         'still_loops': still_loops,
+        'outro_loops': outro_loops,
         'pts_factor': pts_factor,
     }
 
@@ -406,48 +420,6 @@ def build_filter_complex(
     filters = []
     timeline = _build_timeline(seconds, processed_duration, fps)
     input_index = 2
-    transition_duration = 0.0
-    if timeline['main_duration'] > 0 and timeline['still_duration'] > 0:
-        transition_duration = min(
-            0.3,
-            float(timeline['still_duration']) * 2.0,
-            float(timeline['main_duration']) * 2.0
-        )
-    half_transition = transition_duration / 2.0
-    intro_tail_filter = ''
-    main_head_filter = ''
-    if half_transition > 0:
-        intro_tail_start = max(float(timeline['still_duration']) - half_transition, 0.0)
-        intro_tail_filter = 'fade=t=out:st={0:.6f}:d={1:.6f}:color=black,'.format(
-            intro_tail_start,
-            half_transition
-        )
-        main_head_filter = 'fade=t=in:st=0:d={0:.6f}:color=black,'.format(half_transition)
-
-    if overlay_mode == 'noise':
-        filters.append(
-            '[{0}:v]'.format(input_index) +
-            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
-            'format=rgba,'
-            'colorchannelmixer=aa={0:.3f}[noise_src]'.format(clamp(noise_opacity, 0.0, 1.0))
-        )
-        if timeline['main_duration'] > 0:
-            filters.append('[noise_src]split=3[noise_intro][noise_main][noise_outro]')
-        else:
-            filters.append('[noise_src]split=2[noise_intro][noise_outro]')
-        input_index += 1
-
-    if include_watermark:
-        filters.append(
-            '[{0}:v]'.format(input_index) +
-            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
-            'format=rgba,'
-            'colorchannelmixer=aa={0:.3f}[wm_src]'.format(clamp(watermark_opacity, 0.0, 1.0))
-        )
-        if timeline['main_duration'] > 0:
-            filters.append('[wm_src]split=3[wm_intro][wm_main][wm_outro]')
-        else:
-            filters.append('[wm_src]split=2[wm_intro][wm_outro]')
     filters.append(
         '[1:v]'
         'reverse,'
@@ -458,13 +430,22 @@ def build_filter_complex(
         'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
         'setsar=1,'
         'format=rgba,'
-        'trim=duration={0:.6f}[still_base]'.format(timeline['still_duration'])
+        'trim=duration={0:.6f}[intro]'.format(timeline['still_duration'])
     )
-    filters.append('[still_base]split=2[intro_seed][outro_seed]')
 
-    intro_current = 'intro_seed'
-    outro_current = 'outro_seed'
-    main_current = ''
+    if timeline['outro_duration'] > 0:
+        filters.append(
+            '[1:v]'
+            'reverse,'
+            'trim=end_frame=1,'
+            'loop=loop={0}:size=1:start=0,'.format(timeline['outro_loops']) +
+            'setpts=N/({0}*TB),'.format(fps) +
+            'fps={0},'.format(fps) +
+            'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
+            'setsar=1,'
+            'format=rgba,'
+            'trim=duration={0:.6f}[outro]'.format(timeline['outro_duration'])
+        )
 
     if timeline['main_duration'] > 0:
         filters.append(
@@ -474,54 +455,43 @@ def build_filter_complex(
             'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,'
             'setsar=1,'
             'format=rgba,'
-            'trim=duration={0:.6f}[main_seed]'.format(timeline['main_duration'])
+            'trim=duration={0:.6f}[main]'.format(timeline['main_duration'])
         )
-        main_current = 'main_seed'
-
-    if overlay_mode == 'noise':
-        filters.append('[{0}][noise_intro]overlay=0:0:format=auto[intro_noise]'.format(intro_current))
-        intro_current = 'intro_noise'
-        filters.append('[{0}][noise_outro]overlay=0:0:format=auto[outro_noise]'.format(outro_current))
-        outro_current = 'outro_noise'
-        if timeline['main_duration'] > 0:
-            filters.append('[{0}][noise_main]overlay=0:0:format=auto[main_noise]'.format(main_current))
-            main_current = 'main_noise'
-
-    if include_watermark:
-        filters.append('[{0}][wm_intro]overlay=0:0:format=auto[intro_wm]'.format(intro_current))
-        intro_current = 'intro_wm'
-        filters.append('[{0}][wm_outro]overlay=0:0:format=auto[outro_wm]'.format(outro_current))
-        outro_current = 'outro_wm'
-        if timeline['main_duration'] > 0:
-            filters.append('[{0}][wm_main]overlay=0:0:format=auto[main_wm]'.format(main_current))
-            main_current = 'main_wm'
-
-    if intro_tail_filter:
-        filters.append(
-            '[{0}]'.format(intro_current) +
-            '{0}'.format(intro_tail_filter) +
-            'null[intro]'
-        )
-    else:
-        filters.append('[{0}]null[intro]'.format(intro_current))
-
-    if timeline['main_duration'] > 0:
-        if main_head_filter:
-            filters.append(
-                '[{0}]'.format(main_current) +
-                '{0}'.format(main_head_filter) +
-                'null[main]'
-            )
+        if timeline['outro_duration'] > 0:
+            filters.append('[intro][main][outro]concat=n=3:v=1:a=0[base0]')
         else:
-            filters.append('[{0}]null[main]'.format(main_current))
-        filters.append('[{0}]null[outro]'.format(outro_current))
-        filters.append('[intro][main][outro]concat=n=3:v=1:a=0[base0]')
+            filters.append('[intro][main]concat=n=2:v=1:a=0[base0]')
     else:
-        filters.append('[{0}]null[outro]'.format(outro_current))
-        filters.append('[intro][outro]concat=n=2:v=1:a=0[base0]')
+        if timeline['outro_duration'] > 0:
+            filters.append('[intro][outro]concat=n=2:v=1:a=0[base0]')
+        else:
+            filters.append('[intro]null[base0]')
 
     current = 'base0'
-    filters.append('[{0}]unsharp=5:5:0.25:5:5:0.0[v]'.format(current))
+    filters.append('[{0}]unsharp=5:5:0.25:5:5:0.0[base_sharp]'.format(current))
+    current = 'base_sharp'
+
+    if overlay_mode == 'noise':
+        filters.append(
+            '[{0}:v]'.format(input_index) +
+            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
+            'format=rgba,'
+            'colorchannelmixer=aa={0:.3f}[noise]'.format(clamp(noise_opacity, 0.0, 1.0))
+        )
+        filters.append('[{0}][noise]overlay=0:0:format=auto[base_noise]'.format(current))
+        current = 'base_noise'
+        input_index += 1
+
+    if include_watermark:
+        filters.append(
+            '[{0}:v]'.format(input_index) +
+            'scale={0}:{1}:flags=lanczos,'.format(width, height) +
+            'format=rgba,'
+            'colorchannelmixer=aa={0:.3f}[wm]'.format(clamp(watermark_opacity, 0.0, 1.0))
+        )
+        filters.append('[{0}][wm]overlay=0:0:format=auto[v]'.format(current))
+    else:
+        filters.append('[{0}]null[v]'.format(current))
 
     return ';'.join(filters), timeline
 
@@ -552,15 +522,24 @@ def iter_cleanup(paths):
                 path_obj.unlink()
 
 
-def _resolve_export_output_path(input_path, seconds, processed_duration, requested_output_path):
-    auto_output = Path(build_output_path(input_path, seconds=seconds, processed_duration=processed_duration))
+def _resolve_export_output_path(input_path, seconds, processed_duration, requested_output_path, output_format='mp4'):
+    normalized_format = normalize_output_format(output_format)
+    auto_output = Path(
+        build_output_path(
+            input_path,
+            seconds=seconds,
+            processed_duration=processed_duration,
+            output_format=normalized_format,
+        )
+    )
     requested_value = str(requested_output_path or '').strip()
     if not requested_value:
         return auto_output
 
     requested_path = Path(requested_value)
     legacy_default = Path(build_output_path(input_path))
-    if requested_path == legacy_default:
+    legacy_format_default = Path(build_output_path(input_path, output_format=normalized_format))
+    if requested_path == legacy_default or requested_path == legacy_format_default:
         return auto_output
     return requested_path
 
@@ -571,6 +550,7 @@ def export_protected_short_video(
     input_path,
     output_path,
     target_total_duration,
+    output_format='mp4',
     watermark_path='',
     watermark_text='',
     overlay='noise',
@@ -597,6 +577,8 @@ def export_protected_short_video(
         raise RuntimeError('Target duration must be an integer')
     if target_seconds <= 0:
         raise RuntimeError('Target duration must be greater than 0 seconds')
+
+    normalized_output_format = normalize_output_format(output_format)
 
     overlay_mode = str(overlay or 'noise').strip().lower()
     if overlay_mode not in ('off', 'noise'):
@@ -665,6 +647,7 @@ def export_protected_short_video(
             target_seconds,
             processed_meta['duration'],
             output_path,
+            output_format=normalized_output_format,
         )
         if logger is not None:
             logger('Decimated duration: {0}'.format(format_hhmmss(processed_meta['duration'])))
@@ -698,6 +681,11 @@ def export_protected_short_video(
             include_watermark=watermark_asset is not None,
         )
 
+        render_target_path = resolved_output_path
+        if normalized_output_format == 'gif':
+            render_target_path = path_map['temp_render']
+            cleanup_targets.append(render_target_path)
+
         render_cmd = [
             ffmpeg_value,
             '-y',
@@ -715,12 +703,14 @@ def export_protected_short_video(
             '-map', '[v]',
             '-an',
             '-t', str(target_seconds),
+        ])
+        render_cmd.extend([
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',
             '-crf', str(int(crf)),
             '-preset', str(preset),
             '-movflags', '+faststart',
-            _path_for_tool(resolved_output_path, ffmpeg_value),
+            _path_for_tool(render_target_path, ffmpeg_value),
         ])
         _run_ffmpeg_command(
             render_cmd,
@@ -728,11 +718,36 @@ def export_protected_short_video(
             check=True,
             progress_callback=progress_callback,
             progress_start=60,
-            progress_end=99,
+            progress_end=90 if normalized_output_format == 'gif' else 99,
             progress_stage='Rendering protected video',
-            progress_detail=resolved_output_path.name,
+            progress_detail=render_target_path.name,
             total_duration=target_seconds
         )
+
+        if normalized_output_format == 'gif':
+            gif_cmd = [
+                ffmpeg_value,
+                '-y',
+                '-i', _path_for_tool(render_target_path, ffmpeg_value),
+                '-filter_complex',
+                'split[v_palette_src][v_gif_src];'
+                '[v_palette_src]palettegen=reserve_transparent=0:stats_mode=full[palette];'
+                '[v_gif_src][palette]paletteuse=dither=sierra2_4a[vout]',
+                '-map', '[vout]',
+                '-loop', '0',
+                _path_for_tool(resolved_output_path, ffmpeg_value),
+            ]
+            _run_ffmpeg_command(
+                gif_cmd,
+                logger=logger,
+                check=True,
+                progress_callback=progress_callback,
+                progress_start=90,
+                progress_end=99,
+                progress_stage='Encoding GIF animation',
+                progress_detail=resolved_output_path.name,
+                total_duration=target_seconds
+            )
 
         final_meta = probe_video(ffprobe_value, resolved_output_path)
         emit_progress(100, 'Protected video export complete', resolved_output_path.name)
@@ -742,6 +757,7 @@ def export_protected_short_video(
             'processed_source_duration': float(processed_meta['duration']),
             'final_duration': float(final_meta['duration']),
             'pts_factor': float(timeline['pts_factor']),
+            'output_format': normalized_output_format,
             'overlay': overlay_mode,
             'audio_preserved': False,
             'watermark_mode': 'image' if watermark_image is not None else 'text',

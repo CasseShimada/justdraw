@@ -15,7 +15,9 @@ try:
     from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
     from PyQt6.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt6.QtWidgets import (
+        QAbstractItemView,
         QApplication,
+        QCheckBox,
         QComboBox,
         QDialog,
         QFileDialog,
@@ -23,6 +25,7 @@ try:
         QInputDialog,
         QLabel,
         QLineEdit,
+        QListWidget,
         QPushButton,
         QProgressBar,
         QSpinBox,
@@ -34,7 +37,9 @@ except ImportError:
     from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
     from PyQt5.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt5.QtWidgets import (
+        QAbstractItemView,
         QApplication,
+        QCheckBox,
         QComboBox,
         QDialog,
         QFileDialog,
@@ -42,6 +47,7 @@ except ImportError:
         QInputDialog,
         QLabel,
         QLineEdit,
+        QListWidget,
         QPushButton,
         QProgressBar,
         QSpinBox,
@@ -76,6 +82,8 @@ logger = logging.getLogger('justdraw')
 logger.info('Application startup')
 logger.info('Working directory: %s', os.getcwd())
 logger.info('Log file: %s', LOG_FILE_PATH)
+
+APPLICATION_EXIT_REQUESTED = False
 
 
 def qt_message_handler(msg_type, context, message):
@@ -151,6 +159,18 @@ def _qt_non_modal():
     return Qt.WindowModality.NonModal if hasattr(Qt, 'WindowModality') else Qt.NonModal
 
 
+def _qt_extended_selection():
+    if hasattr(QAbstractItemView, 'SelectionMode'):
+        return QAbstractItemView.SelectionMode.ExtendedSelection
+    return QAbstractItemView.ExtendedSelection
+
+
+def _qt_internal_move():
+    if hasattr(QAbstractItemView, 'DragDropMode'):
+        return QAbstractItemView.DragDropMode.InternalMove
+    return QAbstractItemView.InternalMove
+
+
 class ProtectedVideoExportDialog(QDialog):
     def __init__(self, backend):
         super().__init__(None)
@@ -163,7 +183,7 @@ class ProtectedVideoExportDialog(QDialog):
         self.setWindowTitle('Protected Video Export')
         self.setModal(False)
         self.setWindowModality(_qt_non_modal())
-        self.resize(500, 300)
+        self.resize(620, 420)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -174,21 +194,35 @@ class ProtectedVideoExportDialog(QDialog):
         layout.addWidget(title_label)
 
         info_label = QLabel(
-            'Matches video-generator: exact target duration with a 1-second intro hold and '
-            'a 1-second outro hold when the duration allows it.'
+            'Matches video-generator: exact target duration with a 1-second intro hold '
+            'before the accelerated main content, then shows the final frame once at the end.'
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
 
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
-        self.input_path_edit = QLineEdit()
-        self.input_path_edit.setPlaceholderText('Source video path')
-        self.input_browse_button = QPushButton('Browse...')
-        self.input_browse_button.clicked.connect(self._browse_input_path)
-        input_row.addWidget(self.input_path_edit, 1)
-        input_row.addWidget(self.input_browse_button)
-        layout.addLayout(input_row)
+        source_label = QLabel('Source Videos')
+        source_label.setStyleSheet('font-weight: bold;')
+        layout.addWidget(source_label)
+
+        self.input_list_widget = QListWidget()
+        self.input_list_widget.setSelectionMode(_qt_extended_selection())
+        self.input_list_widget.setDragDropMode(_qt_internal_move())
+        layout.addWidget(self.input_list_widget, 1)
+        self.input_list_widget.model().rowsMoved.connect(self._persist_state_after_reorder)
+
+        input_buttons_row = QHBoxLayout()
+        input_buttons_row.setSpacing(8)
+        self.input_add_button = QPushButton('Add Videos...')
+        self.input_add_button.clicked.connect(self._browse_input_paths)
+        self.input_remove_button = QPushButton('Remove Selected')
+        self.input_remove_button.clicked.connect(self._remove_selected_input_paths)
+        self.input_clear_button = QPushButton('Clear')
+        self.input_clear_button.clicked.connect(self._clear_input_paths)
+        input_buttons_row.addWidget(self.input_add_button)
+        input_buttons_row.addWidget(self.input_remove_button)
+        input_buttons_row.addWidget(self.input_clear_button)
+        input_buttons_row.addStretch(1)
+        layout.addLayout(input_buttons_row)
 
         options_row = QHBoxLayout()
         options_row.setSpacing(8)
@@ -196,10 +230,14 @@ class ProtectedVideoExportDialog(QDialog):
         self.duration_spin.setRange(1, 86400)
         self.duration_spin.setPrefix('Seconds: ')
         self.duration_spin.setValue(15)
+        self.output_format_combo = QComboBox()
+        self.output_format_combo.addItem('MP4 Video', 'mp4')
+        self.output_format_combo.addItem('GIF Animation', 'gif')
         self.overlay_combo = QComboBox()
         self.overlay_combo.addItem('Noise Overlay', 'noise')
         self.overlay_combo.addItem('No Overlay', 'off')
         options_row.addWidget(self.duration_spin)
+        options_row.addWidget(self.output_format_combo)
         options_row.addWidget(self.overlay_combo, 1)
         layout.addLayout(options_row)
 
@@ -229,6 +267,9 @@ class ProtectedVideoExportDialog(QDialog):
         watermark_path_layout.addWidget(self.watermark_browse_button)
         layout.addWidget(self.watermark_path_row)
 
+        self.delete_source_checkbox = QCheckBox('Delete original video after successful export')
+        layout.addWidget(self.delete_source_checkbox)
+
         self.status_label = QLabel('Output file name is generated automatically from the processed duration.')
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -236,15 +277,16 @@ class ProtectedVideoExportDialog(QDialog):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(8)
         buttons_row.addStretch(1)
-        self.export_button = QPushButton('Export')
-        self.export_button.clicked.connect(self._start_export)
-        buttons_row.addWidget(self.export_button)
         self.close_button = QPushButton('Close')
         self.close_button.clicked.connect(self.close)
         buttons_row.addWidget(self.close_button)
+        self.export_button = QPushButton('Export')
+        self.export_button.clicked.connect(self._start_export)
+        buttons_row.addWidget(self.export_button)
         layout.addLayout(buttons_row)
 
         self._sync_watermark_mode()
+        self._refresh_status()
 
     def _set_combo_value(self, combo_box, value):
         index = combo_box.findData(value)
@@ -255,15 +297,75 @@ class ProtectedVideoExportDialog(QDialog):
         self.watermark_text_row.setVisible(not image_mode)
         self.watermark_path_row.setVisible(image_mode)
 
-    def _browse_input_path(self):
-        selected_path = self.backend.pick_protected_video_input_path(self.input_path_edit.text())
-        if selected_path:
-            self.input_path_edit.setText(selected_path)
-            self.backend.persist_protected_video_export_state(self.collect_state())
+    def _video_paths(self):
+        return [
+            self.input_list_widget.item(index).text().strip()
+            for index in range(self.input_list_widget.count())
+            if self.input_list_widget.item(index).text().strip() != ''
+        ]
+
+    def _set_video_paths(self, paths):
+        self.input_list_widget.clear()
+        seen = set()
+        for path in paths or []:
+            path_value = str(path or '').strip()
+            if path_value == '' or path_value in seen:
+                continue
+            seen.add(path_value)
+            self.input_list_widget.addItem(path_value)
+        self._refresh_status()
+
+    def _persist_state_after_reorder(self, *_args):
+        self._refresh_status()
+        self.backend.persist_protected_video_export_state(self.collect_state())
+
+    def _refresh_status(self):
+        queued_count = self.input_list_widget.count()
+        self.export_button.setEnabled((not self._export_busy) and queued_count > 0)
+        self.export_button.setText('Exporting...' if self._export_busy else 'Export')
+        if self._export_busy:
+            self.status_label.setText('Export is running in a separate progress window.')
+        elif queued_count == 0:
+            self.status_label.setText(
+                'Add one or more source videos. Output file names are generated automatically from the processed duration.'
+            )
+        else:
+            self.status_label.setText(
+                '{0} video(s) queued. Output file names are generated automatically from the processed duration.'.format(
+                    queued_count
+                )
+            )
+
+    def _browse_input_paths(self):
+        selected_paths = self.backend.pick_protected_video_input_paths(self._video_paths())
+        if not selected_paths:
+            return
+        merged_paths = self._video_paths()
+        for path in selected_paths:
+            if path not in merged_paths:
+                merged_paths.append(path)
+        self._set_video_paths(merged_paths)
+        self.backend.persist_protected_video_export_state(self.collect_state())
+
+    def _remove_selected_input_paths(self):
+        selected_items = list(self.input_list_widget.selectedItems())
+        if not selected_items:
+            return
+        for item in selected_items:
+            self.input_list_widget.takeItem(self.input_list_widget.row(item))
+        self._refresh_status()
+        self.backend.persist_protected_video_export_state(self.collect_state())
+
+    def _clear_input_paths(self):
+        if self.input_list_widget.count() == 0:
+            return
+        self.input_list_widget.clear()
+        self._refresh_status()
+        self.backend.persist_protected_video_export_state(self.collect_state())
 
     def _browse_watermark_path(self):
         selected_path = self.backend.pick_protected_video_watermark_path(
-            self.input_path_edit.text(),
+            self._video_paths()[0] if self._video_paths() else '',
             self.watermark_path_edit.text()
         )
         if selected_path:
@@ -272,53 +374,65 @@ class ProtectedVideoExportDialog(QDialog):
 
     def _start_export(self):
         self.backend.export_protected_short_video_with_options(
-            self.input_path_edit.text(),
+            self._video_paths(),
             str(self.duration_spin.value()),
+            self.output_format_combo.currentData(),
             self.overlay_combo.currentData(),
             self.watermark_text_edit.text(),
             self.watermark_path_edit.text(),
+            self.delete_source_checkbox.isChecked(),
         )
 
     def collect_state(self):
+        video_paths = self._video_paths()
         return {
-            'input_path': self.input_path_edit.text().strip(),
+            'input_path': video_paths[0] if video_paths else '',
+            'input_paths': video_paths,
             'duration_seconds': int(self.duration_spin.value()),
+            'output_format': str(self.output_format_combo.currentData() or 'mp4'),
             'overlay_mode': str(self.overlay_combo.currentData() or 'noise'),
             'watermark_mode': str(self.watermark_mode_combo.currentData() or 'text'),
             'watermark_text': self.watermark_text_edit.text().strip(),
             'watermark_path': self.watermark_path_edit.text().strip(),
+            'delete_source_after_export': self.delete_source_checkbox.isChecked(),
         }
 
     def apply_state(self, state):
         data = dict(state or {})
-        self.input_path_edit.setText(str(data.get('input_path', '')).strip())
+        input_paths = data.get('input_paths')
+        if not isinstance(input_paths, list) or len(input_paths) == 0:
+            legacy_path = str(data.get('input_path', '')).strip()
+            input_paths = [legacy_path] if legacy_path else []
+        self._set_video_paths(input_paths)
         try:
             duration_seconds = int(data.get('duration_seconds', 15))
         except (TypeError, ValueError):
             duration_seconds = 15
         self.duration_spin.setValue(max(1, duration_seconds))
+        self._set_combo_value(self.output_format_combo, str(data.get('output_format', 'mp4')).strip().lower())
         self._set_combo_value(self.overlay_combo, str(data.get('overlay_mode', 'noise')).strip().lower())
         self._set_combo_value(self.watermark_mode_combo, str(data.get('watermark_mode', 'text')).strip().lower())
         self.watermark_text_edit.setText(str(data.get('watermark_text', '')).strip())
         self.watermark_path_edit.setText(str(data.get('watermark_path', '')).strip())
+        self.delete_source_checkbox.setChecked(bool(data.get('delete_source_after_export', False)))
         self._sync_watermark_mode()
+        self._refresh_status()
 
     def set_export_busy(self, enabled):
         self._export_busy = bool(enabled)
-        self.input_path_edit.setEnabled(not self._export_busy)
-        self.input_browse_button.setEnabled(not self._export_busy)
+        self.input_list_widget.setEnabled(not self._export_busy)
+        self.input_add_button.setEnabled(not self._export_busy)
+        self.input_remove_button.setEnabled(not self._export_busy)
+        self.input_clear_button.setEnabled(not self._export_busy)
         self.duration_spin.setEnabled(not self._export_busy)
+        self.output_format_combo.setEnabled(not self._export_busy)
         self.overlay_combo.setEnabled(not self._export_busy)
         self.watermark_mode_combo.setEnabled(not self._export_busy)
         self.watermark_text_edit.setEnabled(not self._export_busy)
         self.watermark_path_edit.setEnabled(not self._export_busy)
         self.watermark_browse_button.setEnabled(not self._export_busy)
-        self.export_button.setEnabled(not self._export_busy)
-        self.export_button.setText('Exporting...' if self._export_busy else 'Export')
-        if self._export_busy:
-            self.status_label.setText('Export is running in a separate progress window.')
-        else:
-            self.status_label.setText('Output file name is generated automatically from the processed duration.')
+        self.delete_source_checkbox.setEnabled(not self._export_busy)
+        self._refresh_status()
 
     def set_stay_on_top(self, enabled):
         enabled_value = bool(enabled)
@@ -424,7 +538,7 @@ class ProtectedVideoExportProgressDialog(QDialog):
         return self._stay_on_top
 
     def closeEvent(self, event):
-        if self._busy:
+        if self._busy and not APPLICATION_EXIT_REQUESTED:
             event.ignore()
             self.raise_()
             self.activateWindow()
@@ -833,6 +947,17 @@ class Backend(QObject):
         print(text)
         self.showtoast.emit(text)
 
+    @pyqtSlot()
+    def quit_application(self):
+        global APPLICATION_EXIT_REQUESTED
+        APPLICATION_EXIT_REQUESTED = True
+        for window in self._iter_auxiliary_video_windows():
+            try:
+                window.close()
+            except Exception:
+                pass
+        app.quit()
+
     def _iter_auxiliary_video_windows(self):
         for window in (self.video_export_dialog, self.video_export_progress_dialog):
             if window is not None:
@@ -942,17 +1067,27 @@ class Backend(QObject):
 
     def _build_protected_video_export_options(
         self,
-        input_path,
+        input_paths,
         duration_seconds,
+        output_format,
         overlay_mode,
         watermark_text,
         watermark_path,
+        delete_source_after_export=False,
     ):
-        selected_path = str(input_path).strip()
-        if selected_path == '':
-            raise ValueError('Input video is required')
-        if not os.path.isfile(selected_path):
-            raise ValueError('Input video does not exist')
+        normalized_paths = []
+        seen = set()
+        raw_paths = input_paths if isinstance(input_paths, (list, tuple)) else [input_paths]
+        for value in raw_paths:
+            selected_path = str(value or '').strip()
+            if selected_path == '' or selected_path in seen:
+                continue
+            if not os.path.isfile(selected_path):
+                raise ValueError('Input video does not exist: {0}'.format(selected_path))
+            seen.add(selected_path)
+            normalized_paths.append(selected_path)
+        if len(normalized_paths) == 0:
+            raise ValueError('At least one input video is required')
 
         try:
             target_duration = int(str(duration_seconds).strip())
@@ -960,6 +1095,8 @@ class Backend(QObject):
             raise ValueError('Target duration must be a whole number of seconds')
         if target_duration <= 0:
             raise ValueError('Target duration must be greater than 0 seconds')
+
+        output_format_value = video_tools.normalize_output_format(output_format)
 
         overlay_value = str(overlay_mode or 'noise').strip().lower()
         if overlay_value not in ('noise', 'off'):
@@ -972,13 +1109,23 @@ class Backend(QObject):
         if watermark_image_path == '' and watermark_text_value == '':
             raise ValueError('Watermark text is required when no watermark image is selected')
 
+        jobs = []
+        for selected_path in normalized_paths:
+            jobs.append({
+                'input_path': selected_path,
+                'output_path': video_tools.build_output_path(selected_path, output_format=output_format_value),
+            })
+
         return {
-            'input_path': selected_path,
-            'output_path': video_tools.build_output_path(selected_path),
+            'input_path': normalized_paths[0],
+            'input_paths': normalized_paths,
             'target_duration': target_duration,
+            'output_format': output_format_value,
             'overlay': overlay_value,
             'watermark_path': watermark_image_path,
             'watermark_text': watermark_text_value,
+            'delete_source_after_export': bool(delete_source_after_export),
+            'jobs': jobs,
             'cleanup_paths': [],
         }
 
@@ -990,37 +1137,114 @@ class Backend(QObject):
         self.protected_video_export_busy_state()
         self.videoexportbusychanged.emit(self.video_export_busy)
 
+    def _build_batch_video_export_progress_callback(self, index, total_jobs):
+        base_progress = float(index) * 100.0 / float(max(1, total_jobs))
+        progress_span = 100.0 / float(max(1, total_jobs))
+
+        def callback(percent, stage, detail):
+            try:
+                local_percent = float(percent)
+            except (TypeError, ValueError):
+                local_percent = 0.0
+            local_percent = max(0.0, min(100.0, local_percent))
+            batch_percent = base_progress + ((local_percent / 100.0) * progress_span)
+            stage_text = str(stage)
+            if total_jobs > 1:
+                stage_text = 'Video {0}/{1} - {2}'.format(index + 1, total_jobs, stage_text)
+            self._emit_video_export_progress(batch_percent, stage_text, str(detail))
+
+        return callback
+
+    def _delete_export_source(self, input_path, output_path):
+        try:
+            source_path = os.path.normcase(os.path.abspath(str(input_path or '').strip()))
+            exported_path = os.path.normcase(os.path.abspath(str(output_path or '').strip()))
+        except Exception:
+            source_path = str(input_path or '').strip()
+            exported_path = str(output_path or '').strip()
+
+        if source_path == '' or source_path == exported_path:
+            return False
+
+        os.remove(str(input_path))
+        return True
+
     def _run_protected_video_export_worker(self, options):
         try:
-            result = video_tools.export_protected_short_video(
-                ffmpeg_path=self.video_tools.get('ffmpeg', ''),
-                ffprobe_path=self.video_tools.get('ffprobe', ''),
-                input_path=options['input_path'],
-                output_path=options.get('output_path', ''),
-                target_total_duration=options['target_duration'],
-                watermark_path=options.get('watermark_path', ''),
-                watermark_text=options.get('watermark_text', ''),
-                overlay=options.get('overlay', 'noise'),
-                logger=self._video_export_log,
-                progress_callback=self._emit_video_export_progress,
-            )
-            exported_output = result.get('output_path', options.get('output_path', ''))
-            message = 'Protected video exported: {0}'.format(os.path.basename(exported_output))
-            logger.info(
-                'Protected video export complete: input=%s output=%s final_duration=%.3f pts_factor=%.4f overlay=%s watermark_mode=%s',
-                options['input_path'],
-                exported_output,
-                float(result.get('final_duration', 0.0)),
-                float(result.get('pts_factor', 1.0)),
-                result.get('overlay', options.get('overlay', 'noise')),
-                result.get('watermark_mode', 'text')
-            )
+            jobs = list(options.get('jobs', []))
+            total_jobs = len(jobs)
+            if total_jobs == 0:
+                raise RuntimeError('No videos are queued for export')
+
+            exported_outputs = []
+            deleted_sources = []
+            for index, job in enumerate(jobs):
+                input_path = job['input_path']
+                try:
+                    result = video_tools.export_protected_short_video(
+                        ffmpeg_path=self.video_tools.get('ffmpeg', ''),
+                        ffprobe_path=self.video_tools.get('ffprobe', ''),
+                        input_path=input_path,
+                        output_path=job.get('output_path', ''),
+                        target_total_duration=options['target_duration'],
+                        output_format=options.get('output_format', 'mp4'),
+                        watermark_path=options.get('watermark_path', ''),
+                        watermark_text=options.get('watermark_text', ''),
+                        overlay=options.get('overlay', 'noise'),
+                        logger=self._video_export_log,
+                        progress_callback=self._build_batch_video_export_progress_callback(index, total_jobs),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        'Video {0}/{1} failed ({2}): {3}'.format(
+                            index + 1,
+                            total_jobs,
+                            os.path.basename(input_path),
+                            exc,
+                        )
+                    ) from exc
+
+                exported_output = result.get('output_path', job.get('output_path', ''))
+                exported_outputs.append(exported_output)
+                logger.info(
+                    'Protected video export complete: input=%s output=%s final_duration=%.3f pts_factor=%.4f overlay=%s watermark_mode=%s',
+                    input_path,
+                    exported_output,
+                    float(result.get('final_duration', 0.0)),
+                    float(result.get('pts_factor', 1.0)),
+                    result.get('overlay', options.get('overlay', 'noise')),
+                    result.get('watermark_mode', 'text')
+                )
+
+                if options.get('delete_source_after_export', False):
+                    try:
+                        if self._delete_export_source(input_path, exported_output):
+                            deleted_sources.append(input_path)
+                    except OSError as exc:
+                        raise RuntimeError(
+                            'Video {0}/{1} exported but source deletion failed ({2}): {3}'.format(
+                                index + 1,
+                                total_jobs,
+                                os.path.basename(input_path),
+                                exc,
+                            )
+                        ) from exc
+
+            if total_jobs == 1:
+                detail = os.path.basename(exported_outputs[0])
+                toast_message = 'Protected video exported: {0}'.format(detail)
+            else:
+                detail = '{0} videos exported successfully.'.format(total_jobs)
+                toast_message = 'Protected video export complete: {0} videos'.format(total_jobs)
+            if deleted_sources:
+                detail = '{0}\nDeleted {1} source video(s).'.format(detail, len(deleted_sources))
+
             self._emit_video_export_finished(
                 True,
                 'Protected video export complete',
-                os.path.basename(exported_output)
+                detail
             )
-            self.toast(message)
+            self.toast(toast_message)
         except Exception as exc:
             logger.exception('Protected video export failed')
             self._emit_video_export_finished(
@@ -1038,31 +1262,55 @@ class Backend(QObject):
             self._set_video_export_busy(False)
             self.video_export_thread = None
 
-    @pyqtSlot(str, result=str)
-    def pick_protected_video_input_path(self, current_path=''):
+    def pick_protected_video_input_paths(self, current_paths=None):
         video_filter = (
             'Video Files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.flv *.ts *.mts *.m2ts);;'
             'All Files (*)'
         )
         saved_state = self._stored_protected_video_export_state()
+        remembered_paths = saved_state.get('input_paths', [])
+        remembered_path = remembered_paths[0] if isinstance(remembered_paths, list) and remembered_paths else ''
+        current_list = current_paths if isinstance(current_paths, (list, tuple)) else [current_paths]
+        current_path = ''
+        for value in current_list:
+            path_value = str(value or '').strip()
+            if path_value != '':
+                current_path = path_value
+                break
         start_path = self._resolve_file_dialog_start_path(
-            remembered_path=saved_state.get('input_path', ''),
+            remembered_path=remembered_path or saved_state.get('input_path', ''),
             current_path=current_path,
         )
         dialog_parent = self.video_export_dialog if self.video_export_dialog is not None and self.video_export_dialog.isVisible() else None
 
-        def pick_input():
-            return QFileDialog.getOpenFileName(
+        def pick_inputs():
+            return QFileDialog.getOpenFileNames(
                 dialog_parent,
-                'Select Source Video',
+                'Select Source Videos',
                 start_path,
                 video_filter
             )
 
-        selected_path, _ = self._run_with_window_not_topmost(pick_input)
-        if selected_path:
-            self.persist_protected_video_export_state({'input_path': selected_path})
-        return str(selected_path or '')
+        selected_paths, _ = self._run_with_window_not_topmost(pick_inputs)
+        normalized_paths = []
+        seen = set()
+        for path in selected_paths or []:
+            path_value = str(path or '').strip()
+            if path_value == '' or path_value in seen:
+                continue
+            seen.add(path_value)
+            normalized_paths.append(path_value)
+        if normalized_paths:
+            self.persist_protected_video_export_state({
+                'input_path': normalized_paths[0],
+                'input_paths': normalized_paths,
+            })
+        return normalized_paths
+
+    @pyqtSlot(str, result=str)
+    def pick_protected_video_input_path(self, current_path=''):
+        selected_paths = self.pick_protected_video_input_paths([current_path] if current_path else [])
+        return selected_paths[0] if selected_paths else ''
 
     @pyqtSlot(str, str, result=str)
     def pick_protected_video_watermark_path(self, input_path, current_path=''):
@@ -1385,8 +1633,16 @@ class Backend(QObject):
         self._show_protected_video_export_window()
         return True
 
-    @pyqtSlot(str, str, str, str, str, result=bool)
-    def export_protected_short_video_with_options(self, input_path, duration_seconds, overlay_mode, watermark_text, watermark_path):
+    def export_protected_short_video_with_options(
+        self,
+        input_paths,
+        duration_seconds,
+        output_format,
+        overlay_mode,
+        watermark_text,
+        watermark_path,
+        delete_source_after_export=False,
+    ):
         if not self.video_tools.get('available'):
             reason = self.video_tools.get('missing_reason', '') or 'required tools are unavailable'
             self.toast('Protected video export is unavailable: {0}'.format(reason))
@@ -1397,11 +1653,13 @@ class Backend(QObject):
 
         try:
             options = self._build_protected_video_export_options(
-                input_path,
+                input_paths,
                 duration_seconds,
+                output_format,
                 overlay_mode,
                 watermark_text,
                 watermark_path,
+                delete_source_after_export,
             )
         except Exception as exc:
             logger.exception('Failed to prepare protected video export options')
@@ -1410,16 +1668,24 @@ class Backend(QObject):
 
         self.persist_protected_video_export_state({
             'input_path': options.get('input_path', ''),
+            'input_paths': options.get('input_paths', []),
             'duration_seconds': options.get('target_duration', 15),
+            'output_format': options.get('output_format', 'mp4'),
             'overlay_mode': options.get('overlay', 'noise'),
             'watermark_mode': 'image' if options.get('watermark_path', '') else 'text',
             'watermark_text': options.get('watermark_text', ''),
             'watermark_path': options.get('watermark_path', ''),
+            'delete_source_after_export': bool(options.get('delete_source_after_export', False)),
         })
         self._set_video_export_busy(True)
-        self._emit_video_export_progress(0, 'Preparing export', 'Protected video export is starting...')
+        job_count = len(options.get('jobs', []))
+        self._emit_video_export_progress(
+            0,
+            'Preparing export',
+            'Protected video export is starting for {0} video(s)...'.format(job_count)
+        )
         self._ensure_video_export_progress_dialog()
-        self.toast('Protected video export started')
+        self.toast('Protected video export started ({0} video(s))'.format(job_count))
         self.video_export_thread = threading.Thread(
             target=self._run_protected_video_export_worker,
             args=(options,),

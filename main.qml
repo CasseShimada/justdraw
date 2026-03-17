@@ -2206,7 +2206,12 @@ ApplicationWindow {
         }
     }
 
-    onClosing: saveCurrentImageViewStateNow()
+    onClosing: {
+        saveCurrentImageViewStateNow();
+        Qt.callLater(function() {
+            backend.quit_application();
+        });
+    }
 
     Component.onCompleted: {
         refreshRecentImagePaths();

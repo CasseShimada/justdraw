@@ -204,12 +204,57 @@ class ImageList:
     def _default_protected_video_export_state(self):
         return {
             'input_path': '',
+            'input_paths': [],
             'duration_seconds': default_protected_video_export_duration_seconds,
+            'output_format': 'mp4',
             'overlay_mode': 'noise',
             'watermark_mode': 'text',
             'watermark_text': '',
             'watermark_path': '',
+            'delete_source_after_export': False,
         }
+
+    def _normalize_protected_video_export_state(self, state=None):
+        normalized = self._default_protected_video_export_state()
+        if isinstance(state, dict):
+            normalized.update(state)
+
+        try:
+            duration_seconds = int(normalized.get('duration_seconds', default_protected_video_export_duration_seconds))
+        except (TypeError, ValueError):
+            duration_seconds = default_protected_video_export_duration_seconds
+        normalized['duration_seconds'] = max(1, duration_seconds)
+
+        raw_input_path = str(normalized.get('input_path', '')).strip()
+        raw_input_paths = normalized.get('input_paths', [])
+        input_paths = []
+        seen = set()
+        if isinstance(raw_input_paths, list):
+            for path in raw_input_paths:
+                path_value = str(path or '').strip()
+                if path_value == '' or path_value in seen:
+                    continue
+                seen.add(path_value)
+                input_paths.append(path_value)
+        if not input_paths and raw_input_path:
+            input_paths = [raw_input_path]
+
+        normalized['input_paths'] = input_paths
+        normalized['input_path'] = input_paths[0] if input_paths else ''
+        normalized['output_format'] = 'gif' if str(normalized.get('output_format', 'mp4')).strip().lower() == 'gif' else 'mp4'
+
+        overlay_mode = str(normalized.get('overlay_mode', 'noise')).strip().lower()
+        normalized['overlay_mode'] = 'off' if overlay_mode == 'off' else 'noise'
+
+        watermark_mode = str(normalized.get('watermark_mode', 'text')).strip().lower()
+        normalized['watermark_mode'] = 'image' if watermark_mode == 'image' else 'text'
+        normalized['watermark_text'] = str(normalized.get('watermark_text', '')).strip()
+        normalized['watermark_path'] = str(normalized.get('watermark_path', '')).strip()
+        normalized['delete_source_after_export'] = self._to_bool(
+            normalized.get('delete_source_after_export', False),
+            False
+        )
+        return normalized
 
     def _active_playback_profile(self):
         if self.app_mode == app_mode_color_photo:
@@ -429,31 +474,7 @@ class ImageList:
             False
         )
         protected_video_state = data.get('protected_video_export')
-        self.protected_video_export_state = self._default_protected_video_export_state()
-        if isinstance(protected_video_state, dict):
-            self.protected_video_export_state['input_path'] = str(
-                protected_video_state.get('input_path', '')
-            ).strip()
-            try:
-                duration_seconds = int(
-                    protected_video_state.get(
-                        'duration_seconds',
-                        default_protected_video_export_duration_seconds
-                    )
-                )
-            except (TypeError, ValueError):
-                duration_seconds = default_protected_video_export_duration_seconds
-            self.protected_video_export_state['duration_seconds'] = max(1, duration_seconds)
-            overlay_mode = str(protected_video_state.get('overlay_mode', 'noise')).strip().lower()
-            self.protected_video_export_state['overlay_mode'] = 'off' if overlay_mode == 'off' else 'noise'
-            watermark_mode = str(protected_video_state.get('watermark_mode', 'text')).strip().lower()
-            self.protected_video_export_state['watermark_mode'] = 'image' if watermark_mode == 'image' else 'text'
-            self.protected_video_export_state['watermark_text'] = str(
-                protected_video_state.get('watermark_text', '')
-            ).strip()
-            self.protected_video_export_state['watermark_path'] = str(
-                protected_video_state.get('watermark_path', '')
-            ).strip()
+        self.protected_video_export_state = self._normalize_protected_video_export_state(protected_video_state)
         self._apply_mode_state_to_runtime()
 
     def saveConfig(self):
@@ -553,34 +574,19 @@ class ImageList:
         return changed
 
     def getProtectedVideoExportState(self):
-        state = self._default_protected_video_export_state()
-        state.update(self.protected_video_export_state)
-
-        try:
-            duration_seconds = int(state.get('duration_seconds', default_protected_video_export_duration_seconds))
-        except (TypeError, ValueError):
-            duration_seconds = default_protected_video_export_duration_seconds
-        state['duration_seconds'] = max(1, duration_seconds)
-        state['input_path'] = str(state.get('input_path', '')).strip()
-        overlay_mode = str(state.get('overlay_mode', 'noise')).strip().lower()
-        state['overlay_mode'] = 'off' if overlay_mode == 'off' else 'noise'
-        watermark_mode = str(state.get('watermark_mode', 'text')).strip().lower()
-        state['watermark_mode'] = 'image' if watermark_mode == 'image' else 'text'
-        state['watermark_text'] = str(state.get('watermark_text', '')).strip()
-        state['watermark_path'] = str(state.get('watermark_path', '')).strip()
-        return state
+        return self._normalize_protected_video_export_state(self.protected_video_export_state)
 
     def setProtectedVideoExportState(self, state):
         if not isinstance(state, dict):
             return False
 
         previous = self.getProtectedVideoExportState()
-        updated = self.getProtectedVideoExportState()
-        for key in updated.keys():
-            if key in state:
+        updated = dict(previous)
+        for key in state.keys():
+            if key in updated:
                 updated[key] = state[key]
 
-        self.protected_video_export_state = updated
+        self.protected_video_export_state = self._normalize_protected_video_export_state(updated)
         changed = self.getProtectedVideoExportState() != previous
         if changed:
             self.saveConfig()

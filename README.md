@@ -1,184 +1,314 @@
 # JustDraw!
-This tool helps artists practice gesture drawing with images on local storage.
 
-## 1. Requirements
+JustDraw is a desktop reference viewer for drawing practice. It supports timed photo switching, color-block reduction studies, color-photo studies, per-image view memory, and protected short video export.
 
-- Python 3.x: https://www.python.org/getit/
-- PyQt6 (preferred): `pip install PyQt6`
-- PyQt5 fallback (if PyQt6 is unavailable): `pip install PyQt5`
+## Requirements
 
-## 2. Run
+- Python 3.x
+- PyQt6 preferred: `pip install PyQt6`
+- PyQt5 fallback: `pip install PyQt5`
+- `ffmpeg` + `ffprobe` only if you want protected video export
+
+The app looks for `ffmpeg` / `ffprobe` on `PATH` and in a few common Windows install folders.
+
+## Run
 
 ```bash
 python justdraw.py
 ```
 
-- Startup command-line parameters were removed.
-- If no valid image source is saved, the app opens the folder picker after startup.
+Notes:
+- Startup command-line options are no longer used.
+- If no saved image source is available for the current mode, the app opens the folder picker after launch.
+- The timer starts paused in `Photo Switching` mode.
 
-## 3. Build Windows EXE (double-click runnable)
+## Build A Windows EXE
 
-### Quick way (double-click)
+### Double-click build
 
-On Windows, double-click:
+On Windows, run:
 
 `build_windows_exe.bat`
 
-After build succeeds, the executable is generated at:
+Output:
 
 `dist\JustDraw.exe`
 
-### Command-line way
+### Command-line build
 
 ```bash
 py -3 -m pip install --upgrade pyinstaller
 py -3 build_exe.py
 ```
 
-The build script auto-detects `PyQt6` / `PyQt5` and bundles:
-
+The build bundles:
 - `main.qml`
 - `images/`
 
-## 4. Image Source
+## Core Modes
 
-- Use `File -> Set Image Folder...` to choose an image folder.
-- The folder is scanned recursively for supported image files:
-  - `.jpg`, `.png`, `.bmp`, `.gif`
-- `.zip` files found in the selected folder are also included as image sources.
+### Photo Switching
 
-## 5. Navigation
+Timed image rotation for gesture, figure, or composition practice.
 
-- Bottom control panel keeps 4 image-switch buttons:
-  - previous image
-  - previous image in same folder
-  - next image in same folder
-  - next image
-- Keyboard shortcuts:
-  - `PgUp`: previous image
-  - `PgDown`: next image
-  - `Space`: pause/resume timer
+Features:
+- countdown timer with pause/resume
+- sequential or random playback
+- recent-path switching
+- per-path playback restore
+- per-image zoom / pan / rotation restore
 
-## 6. Image View Controls
+### Color Blocks
 
-- Mouse wheel zooms the image (zoom center follows mouse position).
-- Left mouse drag pans the image.
-- Bottom bar provides quick transform controls:
-  - `H`
-  - `V`
-  - `+90`
-  - `-90`
-- These 4 transform buttons are in the same row, between previous/next navigation buttons.
-- Double-click image: reset current image state.
-- Image state is remembered per image path:
-  - zoom scale
-  - pan offsets
-  - rotation (multiples of 90 degrees)
-- Horizontal/vertical flip are global settings (shared across all images and remembered in config).
+Reduces the current reference into simplified color masses for value and color-shape study.
 
-## 7. Timer
+Features:
+- adjustable stripe / color count
+- min luma, max luma, and min saturation thresholds
+- optional shape mode
+- copy generated color blocks to the clipboard
 
-- Click timer (top-right) to pause/resume.
-- Timer starts in paused state after launch.
-- Set timer value from `Timer -> Set Timer...`.
-- Right-click menu always provides `Reset Timer`.
-- Opening `Set Timer...` temporarily pauses the timer.
-- If the dialog closes without applying a new value, timer resumes.
+### Color Photo
 
-Timer end modes (`Timer -> Timer End Mode`):
+Uses the original image as a color-study reference with the same navigation and transform tools as photo mode.
 
-- `Auto Next Image`: switch to next image when countdown reaches `00:00`.
-- `Stay On Current Image`: stay on current image; timer turns red and blinks.
-- `Overtime Count Up`: after countdown ends, timer becomes two lines:
-  - line 1: configured timer value
-  - line 2: overtime value (`+mm:ss`) in red
+Features:
+- sequential or random playback
+- optional crystallize effect
+- per-image zoom / pan / rotation restore
+- flip / rotate / copy / reveal actions
 
-Paused timer behavior:
+## Image Sources
 
-- Displays current numeric time (not `PAUSE`).
-- Text color is yellow and blinking.
+Use `File -> Set Image Folder...` in photo-based modes.
 
-## 8. Menus
+Supported sources:
+- image files: `.jpg`, `.png`, `.bmp`, `.gif`
+- `.zip` files found inside the selected folder tree
 
-### File menu
+Behavior:
+- folders are scanned recursively
+- recent paths are tracked per playback profile
+- playback progress and list order are restored per path
+- zip-backed images can be viewed normally, but `Show In File Explorer` is hidden for them
+
+## Navigation And View Controls
+
+Bottom toolbar:
+- previous image
+- previous image in same folder
+- next image in same folder
+- next image
+- flip horizontal
+- flip vertical
+- rotate `-90`
+- rotate `+90`
+- copy image
+- info / utility actions depending on mode
+
+Mouse:
+- mouse wheel zooms
+- left drag pans
+- double-click resets the current image view state
+
+Keyboard shortcuts:
+- `Ctrl+C`: copy the currently visible image area
+- `PgUp`: previous image
+- `PgDown`: next image
+- `Space`: pause / resume timer in `Photo Switching`
+
+View persistence:
+- zoom, pan, and rotation are stored per image
+- horizontal / vertical flip are stored globally
+- current path image states can be reset without affecting other paths
+
+## Timer Behavior
+
+Available in `Photo Switching` mode.
+
+Controls:
+- click the timer to pause / resume
+- `Timer -> Set Timer...`
+- `Timer -> Reset Timer`
+- `Timer -> Random Play`
+- `Timer -> 3-second Pre-start Countdown`
+
+Timer end modes:
+- `Auto Next Image`
+- `Stay On Current Image`
+- `Overtime Count Up`
+
+Details:
+- opening `Set Timer...` temporarily pauses the timer
+- if no new value is applied, the timer resumes
+- paused timer stays numeric and blinks yellow
+- hold mode turns the timer red and blinking at expiry
+- overtime mode shows the configured time plus a red overtime counter
+- optional pre-start countdown runs before each timer start and after resuming
+
+## Menus
+
+### File
+
+Visible in `Photo Switching` and `Color Photo`.
 
 - `Set Image Folder...`
 - `Recent Paths`
-- `Export Protected Short Video...`
-  - creates an exact-length protected timelapse from a source video
-  - output is auto-named as `source_HHMMSS_Ns.mp4`
-  - temp files use the `source_tmp.*` prefix and are cleaned up automatically
-  - supports centered watermark text or image, plus optional noise overlay
 - `Delete Path Playback State...`
 - `Refresh List Order + Random Image`
-  - In random mode: reshuffles current list and jumps to a random image.
-  - In sequence mode: jumps to a random image.
 - `Reset Current Path Image States`
 
-### Timer menu
+### Window
 
+- `Protected Video Export...`
+- `Stay On Top`
+
+### Mode
+
+- `Photo Switching`
+- `Color Blocks`
+- `Color Photo`
+
+### Timer
+
+Visible in `Photo Switching`.
+
+- `Pause Timer` / `Resume Timer`
 - `Set Timer...`
-- `3-second Pre-start Countdown` (checkbox)
+- `Reset Timer`
+- `Random Play`
+- `3-second Pre-start Countdown`
 - `Timer End Mode`
 
-When `3-second Pre-start Countdown` is enabled:
+### Color Sense Tools
 
-- before each timer start, a full-screen `3 -> 2 -> 1` countdown is shown
-- resuming from pause also runs the same `3 -> 2 -> 1` countdown
-- the normal image timer starts after that countdown finishes
+Visible in `Color Blocks`.
 
-### Right-click menu
+- `Increase Colors`
+- `Decrease Colors`
+- `Refresh Colors`
+- `Copy Colors`
+- `Shape Mode`
+- `Set Min Luma...`
+- `Set Max Luma...`
+- `Set Min Saturation...`
 
-- `Reset Timer`
-- `Random Play` (checkbox)
-- `Stay On Top` (checkbox)
-- `Copy Image`
-- `Copy Image Path`
-- `Show In File Explorer` (hidden for zip-backed images)
-- `Reset Current Image State`
+## Context Menus
 
-## 9. Clipboard and Explorer
+### Photo / Image Context Menu
 
-- `Ctrl+C` (window focused): copy currently visible image area in the window to clipboard.
-- `Copy Image`: same behavior as `Ctrl+C`.
-- `Copy Image Path`: copy current image file path text.
-- `Show In File Explorer`: reveal current image in system file explorer (only for non-zip images).
+- pause / resume timer
+- reset timer
+- random play
+- set image folder
+- random image
+- copy image
+- copy image path
+- show in file explorer
+- reset current image state
+- reset current path image states
+- flip horizontal / vertical
+- rotate `-90` / `+90`
+- stay on top
 
-## 10. Toast Notifications
+### Color Blocks Context Menu
 
-- Actions show a semi-transparent toast message.
-- If a new action happens while toast is visible, toast text is immediately replaced with the latest action.
+- increase / decrease colors
+- refresh colors
+- copy colors
+- shape mode
+- threshold editing
+- stay on top
 
-## 11. Window Size
+### Color Photo Context Menu
 
-- Default window size: `840x1120`.
-- Resized window size is remembered.
+- set image folder
+- random play
+- next random photo
+- copy image
+- copy image path
+- show in file explorer
+- reset current image state
+- reset current path image states
+- flip horizontal / vertical
+- rotate `-90` / `+90`
+- crystallize
+- stay on top
 
-## 12. Persistence Files
+## Protected Video Export
+
+Protected video export is available when both `ffmpeg` and `ffprobe` are found.
+
+Open it from:
+- `Window -> Protected Video Export...`
+
+Current behavior:
+- opens a dedicated export settings window, separate from the main app window
+- uses a separate progress window during export
+- the export progress window stays quiet in the background while rendering
+- the progress window comes to the front when export completes or fails
+- supports a reorderable multi-video queue and exports each item one by one
+- lets you choose `mp4` or `gif` output format
+- can optionally delete each source video after its export succeeds
+- remembers the last selected source-video queue and watermark path
+- file pickers prefer the remembered path on the next browse
+
+Export pipeline:
+- uses the `video-generator`-style protected export flow
+- removes duplicate frames from the source first
+- outputs an auto-named file like `source_HHMMSS_15s.mp4` or `source_HHMMSS_15s.gif`
+- creates a 1-second intro hold before the accelerated main content
+- shows the final frame once at the very end
+- applies watermark before the intro-to-main transition
+- supports centered watermark text or watermark image
+- supports optional noise overlay
+- cleans temporary files automatically unless changed in code
+
+## Clipboard And Explorer
+
+- `Ctrl+C` or `Copy Image` copies the currently visible rendered image area
+- `Copy Image Path` copies the source image path as text
+- `Show In File Explorer` reveals the current file in the system file manager
+- explorer reveal is disabled for zip-backed images
+
+## Notifications And Window Behavior
+
+- actions use toast notifications
+- the main window size is remembered
+- stay-on-top is remembered
+- auxiliary export windows follow the stay-on-top setting
+
+## Persistence
 
 ### `justdraw_config.json`
-Stores global settings:
 
-- last image source path
-- window width and height
+Stores app-wide and mode-scoped settings such as:
+- current app mode
+- saved image source paths per mode
+- last image path per mode
+- random play mode per mode
 - timer seconds
-- playback mode (`sequential` / `random`)
-- stay-on-top mode
 - timer end mode
-- last image path
+- pre-start countdown
+- color-block settings
+- color-photo crystallize setting
+- window size
+- stay-on-top
+- global flip state
+- protected video export form state
 
 ### `justdraw_playback_state.json`
-Stores per-path playback data:
 
+Stores per-path playback data such as:
 - last image path
-- playback mode
+- restored image order for that path
+- random play mode
 - timer seconds
 - timer end mode
-- per-image view states
-- global flip settings
 - recent usage timestamp
+- per-image view states
 
-When running from source (`python justdraw.py`), both files are saved in project root.
-When running packaged `exe`, both files are saved in:
+When running from source, these files are saved in the project folder.
+When running as a packaged app, they are saved under the app data directory, for example on Windows:
 
-- Windows: `%APPDATA%\JustDraw\`
+- `%APPDATA%\JustDraw\`
