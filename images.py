@@ -1021,6 +1021,50 @@ class ImageList:
 
         return self._switchToImageList(new_img_list, path)
 
+    def clearCurrentImageSource(self):
+        if self.app_mode == app_mode_color_blocks:
+            return False
+
+        changed = False
+        mode_state = self.mode_states.get(self.app_mode)
+        if isinstance(mode_state, dict):
+            if str(mode_state.get('image_root_path', '')).strip() != '':
+                mode_state['image_root_path'] = ''
+                changed = True
+            if str(mode_state.get('last_image_path', '')).strip() != '':
+                mode_state['last_image_path'] = ''
+                changed = True
+            if self.app_mode == app_mode_color_photo and self._to_bool(mode_state.get('random_play_mode', False), False):
+                mode_state['random_play_mode'] = False
+                changed = True
+
+        if self.image_root_paths:
+            self.image_root_paths = []
+            changed = True
+        if self.img_list:
+            self.img_list = []
+            changed = True
+        if self.cur_img_index != 0:
+            self.cur_img_index = 0
+            changed = True
+        if self.cur_image_path != '':
+            self.cur_image_path = ''
+            changed = True
+        if self.last_image_path != '':
+            self.last_image_path = ''
+            changed = True
+        if self.random_play_mode:
+            self.random_play_mode = False
+            changed = True
+
+        self.cur_timer = self.max_timer_value
+        self.timer_expired_hold = False
+        self.timer_overtime_seconds = 0
+
+        if changed:
+            self.saveConfig()
+        return changed
+
     def setZipFiles(self, zip_file_paths):
         valid_zip_files = []
         for item in zip_file_paths:
@@ -1138,6 +1182,7 @@ class ImageList:
         if len(self.img_list) == 0:
             if source_path:
                 print('No supported images found in source: {0}'.format(source_path))
+                self.clearCurrentImageSource()
             print('No image source selected. Use File -> Set Image Source...')
             self.cur_timer = self.max_timer_value
             return

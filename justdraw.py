@@ -13,7 +13,7 @@ os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
 try:
     from PyQt6.QtQml import QQmlApplicationEngine
     from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt6.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt6.QtCore import QThread, QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -35,7 +35,7 @@ try:
 except ImportError:
     from PyQt5.QtQml import QQmlApplicationEngine
     from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt5.QtCore import QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+    from PyQt5.QtCore import QThread, QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
     from PyQt5.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -629,6 +629,91 @@ class ProtectedVideoExportProgressDialog(QDialog):
         super().closeEvent(event)
 
 
+class ImageSourceLoadWorker(QObject):
+    finished = pyqtSignal(str, object, str, arguments=['source_path', 'image_list', 'error_message'])
+
+    def __init__(self, source_path):
+        super().__init__()
+        self.source_path = str(source_path or '').strip()
+
+    @pyqtSlot()
+    def run(self):
+        global imgList
+
+        try:
+            image_list = imgList._buildImageListFromSourcePath(self.source_path)
+        except Exception as exc:
+            logger.exception('Image source load failed for %s', self.source_path)
+            self.finished.emit(self.source_path, [], str(exc))
+            return
+
+        self.finished.emit(self.source_path, image_list, '')
+
+
+class ImageSourceLoadingDialog(QDialog):
+    def __init__(self):
+        super().__init__(None)
+        self._stay_on_top = False
+        self._busy = False
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setWindowTitle('Opening Images')
+        self.setModal(False)
+        self.setWindowModality(_qt_non_modal())
+        self.resize(420, 140)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        self.stage_label = QLabel('Scanning image source...')
+        self.stage_label.setStyleSheet('font-weight: bold;')
+        layout.addWidget(self.stage_label)
+
+        self.detail_label = QLabel('')
+        self.detail_label.setWordWrap(True)
+        layout.addWidget(self.detail_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        layout.addWidget(self.progress_bar)
+
+    def show_loading(self, source_path):
+        self._busy = True
+        self.stage_label.setText('Opening image source...')
+        self.detail_label.setText(str(source_path))
+        self.progress_bar.setRange(0, 0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def finish(self):
+        self._busy = False
+        self.hide()
+
+    def set_stay_on_top(self, enabled):
+        enabled_value = bool(enabled)
+        if self._stay_on_top == enabled_value:
+            return
+        was_visible = self.isVisible()
+        self._stay_on_top = enabled_value
+        self.setWindowFlag(_qt_window_stays_on_top_hint(), enabled_value)
+        if was_visible:
+            self.show()
+
+    def is_stay_on_top(self):
+        return self._stay_on_top
+
+    def closeEvent(self, event):
+        if self._busy and not APPLICATION_EXIT_REQUESTED:
+            event.ignore()
+            self.raise_()
+            self.activateWindow()
+            return
+        super().closeEvent(event)
+
+
 class Backend(QObject):
     # update timer value in the upper right corner
     setcurtimer = pyqtSignal(str, str, arguments=['cur_timer, color'])
@@ -729,6 +814,10 @@ class Backend(QObject):
         self.video_export_thread = None
         self.video_export_dialog = None
         self.video_export_progress_dialog = None
+        self.image_source_loading_thread = None
+        self.image_source_loading_worker = None
+        self.image_source_loading_dialog = None
+        self.image_source_loading_reopen_on_failure = False
         self.videoexportbusychanged.connect(self._handle_video_export_busy_changed)
         self.videoexportprogress.connect(self._handle_video_export_progress)
         self.videoexportfinished.connect(self._handle_video_export_finished)
@@ -959,6 +1048,8 @@ class Backend(QObject):
             return False
         if imgList.hasImages():
             return False
+        if self.image_source_loading_thread is not None:
+            return False
         if self.image_source_prompt_pending:
             return False
 
@@ -1008,17 +1099,7 @@ class Backend(QObject):
         if not folder:
             return False
 
-        if not imgList.setImageRootPath(folder):
-            print('Invalid image folder or no supported images: {0}'.format(folder))
-            return False
-
-        self.emit_mode_state(reload_image=True)
-        if imgList.getAppMode() == 'photo_switching':
-            self.schedule_timer_start()
-        else:
-            self.prestart_pending = False
-            self.clear_prestart_countdown()
-        return True
+        return self._begin_image_source_load(folder, reopen_on_failure=True)
 
     def stay_on_top(self):
         global imgList
@@ -1034,22 +1115,26 @@ class Backend(QObject):
     def quit_application(self):
         global APPLICATION_EXIT_REQUESTED
         APPLICATION_EXIT_REQUESTED = True
-        for window in self._iter_auxiliary_video_windows():
+        for window in self._iter_auxiliary_windows():
             try:
                 window.close()
             except Exception:
                 pass
         app.quit()
 
-    def _iter_auxiliary_video_windows(self):
-        for window in (self.video_export_dialog, self.video_export_progress_dialog):
+    def _iter_auxiliary_windows(self):
+        for window in (
+            self.video_export_dialog,
+            self.video_export_progress_dialog,
+            self.image_source_loading_dialog,
+        ):
             if window is not None:
                 yield window
 
     def _sync_auxiliary_window_stay_on_top(self):
         global imgList
         stay_on_top = imgList.isStayOnTop()
-        for window in self._iter_auxiliary_video_windows():
+        for window in self._iter_auxiliary_windows():
             window.set_stay_on_top(stay_on_top)
 
     def _ensure_video_export_dialog(self):
@@ -1066,6 +1151,13 @@ class Backend(QObject):
             self.video_export_progress_dialog.setWindowFlag(_qt_window_flag(), True)
             self._sync_auxiliary_window_stay_on_top()
         return self.video_export_progress_dialog
+
+    def _ensure_image_source_loading_dialog(self):
+        if self.image_source_loading_dialog is None:
+            self.image_source_loading_dialog = ImageSourceLoadingDialog()
+            self.image_source_loading_dialog.setWindowFlag(_qt_window_flag(), True)
+            self._sync_auxiliary_window_stay_on_top()
+        return self.image_source_loading_dialog
 
     def _stored_protected_video_export_state(self):
         global imgList
@@ -1135,7 +1227,7 @@ class Backend(QObject):
             root.setProperty('stayOnTop', False)
             app.processEvents()
 
-        for window in self._iter_auxiliary_video_windows():
+        for window in self._iter_auxiliary_windows():
             if window.is_stay_on_top():
                 window.set_stay_on_top(False)
                 toggled_windows.append(window)
@@ -1147,6 +1239,73 @@ class Backend(QObject):
                 window.set_stay_on_top(True)
             if root is not None and was_stay_on_top:
                 root.setProperty('stayOnTop', True)
+
+    def _begin_image_source_load(self, path, reopen_on_failure=False):
+        global imgList
+
+        source_path = str(path or '').strip()
+        if source_path == '' or self.image_source_loading_thread is not None:
+            return False
+
+        dialog = self._ensure_image_source_loading_dialog()
+        dialog.show_loading(source_path)
+        self.image_source_loading_reopen_on_failure = bool(reopen_on_failure)
+
+        self.image_source_loading_thread = QThread()
+        self.image_source_loading_worker = ImageSourceLoadWorker(source_path)
+        self.image_source_loading_worker.moveToThread(self.image_source_loading_thread)
+        self.image_source_loading_thread.started.connect(self.image_source_loading_worker.run)
+        self.image_source_loading_worker.finished.connect(self._handle_image_source_load_finished)
+        self.image_source_loading_worker.finished.connect(self.image_source_loading_thread.quit)
+        self.image_source_loading_worker.finished.connect(self.image_source_loading_worker.deleteLater)
+        self.image_source_loading_thread.finished.connect(self.image_source_loading_thread.deleteLater)
+        self.image_source_loading_thread.finished.connect(self._cleanup_image_source_load_worker)
+        self.image_source_loading_thread.start()
+        return True
+
+    @pyqtSlot()
+    def _cleanup_image_source_load_worker(self):
+        self.image_source_loading_thread = None
+        self.image_source_loading_worker = None
+
+    @pyqtSlot(str, object, str)
+    def _handle_image_source_load_finished(self, source_path, image_list, error_message):
+        global imgList
+
+        if self.image_source_loading_dialog is not None:
+            self.image_source_loading_dialog.finish()
+        self.image_source_loading_thread = None
+        self.image_source_loading_worker = None
+
+        source_path_value = str(source_path or '').strip()
+        image_items = list(image_list or [])
+        error_text = str(error_message or '').strip()
+        reopen_on_failure = self.image_source_loading_reopen_on_failure
+        self.image_source_loading_reopen_on_failure = False
+
+        if error_text:
+            imgList.clearCurrentImageSource()
+            self.emit_mode_state(reload_image=True)
+            self.toast('Failed to open image source: {0}'.format(error_text))
+            if reopen_on_failure:
+                self.ensure_image_source_for_current_mode(async_open=True)
+            return
+
+        if len(image_items) == 0 or not imgList._switchToImageList(image_items, source_path_value):
+            imgList.clearCurrentImageSource()
+            self.emit_mode_state(reload_image=True)
+            self.toast('Cannot open image source: {0}'.format(source_path_value))
+            if reopen_on_failure:
+                self.ensure_image_source_for_current_mode(async_open=True)
+            return
+
+        self.emit_mode_state(reload_image=True)
+        if imgList.getAppMode() == 'photo_switching':
+            self.schedule_timer_start()
+        else:
+            self.prestart_pending = False
+            self.clear_prestart_countdown()
+        self.toast('Opened image source: {0}'.format(source_path_value))
 
     def _build_protected_video_export_options(
         self,
@@ -1442,7 +1601,7 @@ class Backend(QObject):
 
     @pyqtSlot(result=bool)
     def select_image_root_path(self):
-        if self.image_source_prompt_pending:
+        if self.image_source_prompt_pending or self.image_source_loading_thread is not None:
             return False
 
         self.image_source_prompt_pending = True
@@ -1450,18 +1609,10 @@ class Backend(QObject):
 
     @pyqtSlot(str, result=bool)
     def set_image_root_path(self, path):
-        global imgList
-
-        if not imgList.setImageRootPath(path):
+        if self.image_source_loading_thread is not None:
             return False
 
-        self.emit_mode_state(reload_image=True)
-        if imgList.getAppMode() == 'photo_switching':
-            self.schedule_timer_start()
-        else:
-            self.prestart_pending = False
-            self.clear_prestart_countdown()
-        return True
+        return self._begin_image_source_load(path, reopen_on_failure=True)
 
     @pyqtSlot(result='QStringList')
     def get_recent_image_paths(self):

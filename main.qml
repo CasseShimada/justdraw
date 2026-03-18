@@ -977,7 +977,7 @@ ApplicationWindow {
         saveCurrentImageViewStateNow();
         if (backend.select_image_root_path()) {
             refreshRecentImagePaths();
-            showActionToast("Image folder updated");
+            showActionToast("Opening image folder...");
         }
     }
 
@@ -989,7 +989,7 @@ ApplicationWindow {
         saveCurrentImageViewStateNow();
         if (backend.set_image_root_path(path)) {
             refreshRecentImagePaths();
-            showActionToast("Switched to " + path);
+            showActionToast("Opening " + path);
         } else {
             showActionToast("Cannot switch to selected path");
         }
