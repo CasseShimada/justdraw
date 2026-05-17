@@ -119,21 +119,6 @@ Keyboard shortcuts:
 - `PgDown`: next image
 - `Space`: pause / resume timer in `Photo Switching`
 
-Photo Switching bottom toolbar:
-- previous image
-- previous image in the same folder
-- flip horizontal
-- flip vertical
-- rotate `+90`
-- rotate `-90`
-- next image in the same folder
-- next image
-
-Color Photo bottom toolbar:
-- previous image
-- next image
-- crystallize toggle
-
 View-state persistence:
 - zoom, pan, and rotation are stored per image and per path
 - horizontal / vertical flips are stored globally
@@ -208,53 +193,49 @@ Visible in `Color Blocks`.
 - `Increase Colors`
 - `Decrease Colors`
 - `Refresh Colors`
-- `Copy Colors`
 - `Shape Mode`
 - `Set Min Luma...`
 - `Set Max Luma...`
 - `Set Min Saturation...`
 
+### Settings
+
+- `Language`
+  - `English`
+  - `Chinese`
+
+The first launch uses the system language: Chinese systems start in Chinese, and other systems start in English. After the user changes the language in `Settings -> Language`, the choice is saved.
+
 ## Context Menus
 
 ### Photo Switching Context Menu
 
-- pause / resume timer
-- reset timer
-- random play
-- set image folder
-- random image
+- previous image
+- previous image in the same folder
+- next image in the same folder
+- next image
 - copy image
 - copy image path
 - show in file explorer
 - reset current image state
-- reset current path image states
 - flip horizontal / vertical
 - rotate `-90` / `+90`
-- stay on top
 
 ### Color Blocks Context Menu
 
-- increase / decrease colors
-- refresh colors
 - copy colors
-- shape mode
-- threshold editing
-- stay on top
 
 ### Color Photo Context Menu
 
-- set image folder
-- random play
-- next random photo
+- previous image
+- next image
 - copy image
 - copy image path
 - show in file explorer
 - reset current image state
-- reset current path image states
 - flip horizontal / vertical
 - rotate `-90` / `+90`
 - crystallize
-- stay on top
 
 ## Clipboard And Explorer Integration
 
@@ -361,6 +342,7 @@ When running as a packaged app:
 - color-photo crystallize toggle
 - window size
 - stay-on-top flag
+- UI language
 - global flip state
 - protected video export dialog state
 
@@ -425,7 +407,7 @@ Behavior:
 ## Project Layout
 
 - `justdraw.py` - PyQt backend, dialogs, timer control, clipboard helpers, explorer integration, and export orchestration
-- `main.qml` - the main UI, menus, viewports, toolbars, popups, and toast notifications
+- `main.qml` - the main UI, menus, viewports, popups, and toast notifications
 - `images.py` - image-source scanning, ZIP handling, playback persistence, timer state, and mode-scoped config
 - `video_tools.py` - `ffmpeg` / `ffprobe` helpers and protected-video export pipeline
 - `build_exe.py` - PyInstaller one-file build entry point

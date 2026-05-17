@@ -733,6 +733,9 @@ class Backend(QObject):
     # set always-on-top mode in UI
     setstayontop = pyqtSignal(bool, arguments=['enabled'])
 
+    # set UI language: en / zh
+    setuilanguage = pyqtSignal(str, arguments=['language'])
+
     # set timer end mode: auto_next / hold / overtime
     settimerendmode = pyqtSignal(str, arguments=['mode'])
 
@@ -1003,6 +1006,10 @@ class Backend(QObject):
 
     def protected_video_export_busy_state(self):
         self.setprotectedvideoexportbusy.emit(bool(self.video_export_busy))
+
+    def ui_language(self):
+        global imgList
+        self.setuilanguage.emit(imgList.getUiLanguage())
 
     def emit_mode_state(self, reload_image=True):
         global imgList
@@ -1836,6 +1843,13 @@ class Backend(QObject):
             return False
         return self.set_app_mode(normalized)
 
+    @pyqtSlot(str, result=bool)
+    def set_ui_language(self, language):
+        global imgList
+        changed = imgList.setUiLanguage(language)
+        self.ui_language()
+        return changed
+
     @pyqtSlot(str, str, str, str, result=bool)
     def set_color_blocks_settings(self, stripe_count, min_luma, max_luma, min_saturation):
         global imgList
@@ -2123,6 +2137,7 @@ engine.rootObjects()[0].setProperty('backend', backend)
 # apply window size from command line
 backend.windowsize()
 backend.stay_on_top()
+backend.ui_language()
 backend.emit_mode_state(reload_image=False)
 backend.emit_global_flip_state()
 

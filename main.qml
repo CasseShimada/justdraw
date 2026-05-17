@@ -7,6 +7,115 @@ ApplicationWindow {
     id: root
 
     property QtObject backend
+    property string uiLanguage: "en"
+    property var translations: ({
+        "menu.file": {"en": "File", "zh": "文件"},
+        "menu.window": {"en": "Window", "zh": "窗口"},
+        "menu.mode": {"en": "Mode", "zh": "模式"},
+        "menu.timer": {"en": "Timer", "zh": "计时器"},
+        "menu.colorSenseTools": {"en": "Color Sense Tools", "zh": "色感工具"},
+        "menu.settings": {"en": "Settings", "zh": "设置"},
+        "menu.language": {"en": "Language", "zh": "语言"},
+        "language.english": {"en": "English", "zh": "英语"},
+        "language.chinese": {"en": "Chinese", "zh": "中文"},
+        "file.setImageFolder": {"en": "Set Image Folder...", "zh": "设置图片文件夹..."},
+        "file.recentPaths": {"en": "Recent Paths", "zh": "最近路径"},
+        "file.noRecentPaths": {"en": "(No recent paths)", "zh": "（没有最近路径）"},
+        "file.deletePathPlaybackState": {"en": "Delete Path Playback State...", "zh": "删除路径播放状态..."},
+        "file.refreshRandom": {"en": "Refresh List Order + Random Image", "zh": "刷新列表顺序并随机图片"},
+        "file.resetPathImageStates": {"en": "Reset Current Path Image States", "zh": "重置当前路径图片状态"},
+        "window.export": {"en": "Protected Video Export...", "zh": "受保护视频导出..."},
+        "window.exportBusy": {"en": "Protected Video Export... (Busy)", "zh": "受保护视频导出...（忙碌）"},
+        "window.exportUnavailable": {"en": "Protected Video Export Unavailable", "zh": "受保护视频导出不可用"},
+        "window.stayOnTop": {"en": "Stay On Top", "zh": "窗口置顶"},
+        "mode.photoSwitching": {"en": "Photo Switching", "zh": "图片切换"},
+        "mode.colorBlocks": {"en": "Color Blocks", "zh": "色块练习"},
+        "mode.colorPhoto": {"en": "Color Photo", "zh": "色彩照片"},
+        "timer.pause": {"en": "Pause Timer", "zh": "暂停计时器"},
+        "timer.resume": {"en": "Resume Timer", "zh": "继续计时器"},
+        "timer.set": {"en": "Set Timer...", "zh": "设置计时器..."},
+        "timer.reset": {"en": "Reset Timer", "zh": "重置计时器"},
+        "timer.randomPlay": {"en": "Random Play", "zh": "随机播放"},
+        "timer.prestart": {"en": "3-second Pre-start Countdown", "zh": "3 秒预备倒计时"},
+        "timer.endMode": {"en": "Timer End Mode", "zh": "计时结束模式"},
+        "timer.autoNext": {"en": "Auto Next Image", "zh": "自动下一张"},
+        "timer.stayCurrent": {"en": "Stay On Current Image", "zh": "停留当前图片"},
+        "timer.overtime": {"en": "Overtime Count Up", "zh": "超时正计时"},
+        "color.increase": {"en": "Increase Colors", "zh": "增加颜色"},
+        "color.decrease": {"en": "Decrease Colors", "zh": "减少颜色"},
+        "color.refresh": {"en": "Refresh Colors", "zh": "刷新颜色"},
+        "color.shapeMode": {"en": "Shape Mode", "zh": "形状模式"},
+        "color.setMinLuma": {"en": "Set Min Luma...", "zh": "设置最低亮度..."},
+        "color.setMaxLuma": {"en": "Set Max Luma...", "zh": "设置最高亮度..."},
+        "color.setMinSaturation": {"en": "Set Min Saturation...", "zh": "设置最低饱和度..."},
+        "color.copyColors": {"en": "Copy Colors", "zh": "复制颜色"},
+        "context.previousImage": {"en": "Previous Image", "zh": "上一张图片"},
+        "context.previousImageInFolder": {"en": "Previous Image In Folder", "zh": "文件夹内上一张"},
+        "context.nextImageInFolder": {"en": "Next Image In Folder", "zh": "文件夹内下一张"},
+        "context.nextImage": {"en": "Next Image", "zh": "下一张图片"},
+        "context.copyImage": {"en": "Copy Image", "zh": "复制图片"},
+        "context.copyImagePath": {"en": "Copy Image Path", "zh": "复制图片路径"},
+        "context.showInExplorer": {"en": "Show In File Explorer", "zh": "在文件资源管理器中显示"},
+        "context.resetCurrentImageState": {"en": "Reset Current Image State", "zh": "重置当前图片状态"},
+        "context.flipHorizontal": {"en": "Flip Horizontal", "zh": "水平翻转"},
+        "context.flipVertical": {"en": "Flip Vertical", "zh": "垂直翻转"},
+        "context.rotateLeft": {"en": "Rotate -90", "zh": "旋转 -90"},
+        "context.rotateRight": {"en": "Rotate +90", "zh": "旋转 +90"},
+        "context.crystallize": {"en": "Crystallize", "zh": "晶格化"},
+        "label.colors": {"en": "Colors", "zh": "颜色"},
+        "popup.setSeconds": {"en": "Set seconds", "zh": "设置秒数"},
+        "popup.seconds": {"en": "seconds", "zh": "秒"},
+        "popup.cancel": {"en": "Cancel", "zh": "取消"},
+        "popup.apply": {"en": "Apply", "zh": "应用"},
+        "unit.secondsSuffix": {"en": "s", "zh": " 秒"},
+        "threshold.minLuma": {"en": "Set Min Luma (0-1)", "zh": "设置最低亮度（0-1）"},
+        "threshold.maxLuma": {"en": "Set Max Luma (0-1)", "zh": "设置最高亮度（0-1）"},
+        "threshold.minSaturation": {"en": "Set Min Saturation (0-1)", "zh": "设置最低饱和度（0-1）"},
+        "toast.language": {"en": "Language set to English", "zh": "语言已切换为中文"},
+        "toast.colorCount": {"en": "Color count: ", "zh": "颜色数量："},
+        "toast.colorsRefreshed": {"en": "Colors refreshed", "zh": "颜色已刷新"},
+        "toast.shapeEnabled": {"en": "Shape mode enabled", "zh": "形状模式已开启"},
+        "toast.shapeDisabled": {"en": "Shape mode disabled", "zh": "形状模式已关闭"},
+        "toast.cannotCopyColors": {"en": "Cannot copy colors", "zh": "无法复制颜色"},
+        "toast.colorCopied": {"en": "Color copied", "zh": "颜色已复制"},
+        "toast.colorsCopied": {"en": "Colors copied", "zh": "颜色已复制"},
+        "toast.lumaInvalid": {"en": "Min luma must be <= max luma", "zh": "最低亮度必须小于等于最高亮度"},
+        "toast.thresholdsUpdated": {"en": "Color thresholds updated", "zh": "颜色阈值已更新"},
+        "toast.openingFolder": {"en": "Opening image folder...", "zh": "正在打开图片文件夹..."},
+        "toast.opening": {"en": "Opening ", "zh": "正在打开 "},
+        "toast.cannotSwitchPath": {"en": "Cannot switch to selected path", "zh": "无法切换到所选路径"},
+        "toast.randomImage": {"en": "Random image", "zh": "随机图片"},
+        "toast.cannotRefreshList": {"en": "Cannot refresh image list", "zh": "无法刷新图片列表"},
+        "toast.randomMode": {"en": "Random mode enabled", "zh": "随机模式已开启"},
+        "toast.sequenceMode": {"en": "Sequence mode enabled", "zh": "顺序模式已开启"},
+        "toast.stayTopEnabled": {"en": "Stay on top enabled", "zh": "窗口置顶已开启"},
+        "toast.stayTopDisabled": {"en": "Stay on top disabled", "zh": "窗口置顶已关闭"},
+        "toast.timerResumed": {"en": "Timer resumed", "zh": "计时器已继续"},
+        "toast.timerPaused": {"en": "Timer paused", "zh": "计时器已暂停"},
+        "toast.timerReset": {"en": "Timer reset", "zh": "计时器已重置"},
+        "toast.timerSetTo": {"en": "Timer set to ", "zh": "计时器已设为 "},
+        "toast.timerEndMode": {"en": "Timer end mode: ", "zh": "计时结束模式："},
+        "toast.prestartEnabled": {"en": "3-second pre-start enabled", "zh": "3 秒预备倒计时已开启"},
+        "toast.prestartDisabled": {"en": "3-second pre-start disabled", "zh": "3 秒预备倒计时已关闭"},
+        "toast.cannotCopyImage": {"en": "Cannot copy current image", "zh": "无法复制当前图片"},
+        "toast.imageCopied": {"en": "Image copied", "zh": "图片已复制"},
+        "toast.imagePathCopied": {"en": "Image path copied", "zh": "图片路径已复制"},
+        "toast.revealed": {"en": "Revealed in file explorer", "zh": "已在文件资源管理器中显示"},
+        "toast.cannotReveal": {"en": "Cannot reveal current image", "zh": "无法显示当前图片"},
+        "toast.imageStateReset": {"en": "Current image state reset", "zh": "当前图片状态已重置"},
+        "toast.pathStatesReset": {"en": "Current path image states reset", "zh": "当前路径图片状态已重置"},
+        "toast.noPathStates": {"en": "No image states to reset", "zh": "没有可重置的图片状态"},
+        "toast.pathPlaybackDeleted": {"en": "Path playback state deleted", "zh": "路径播放状态已删除"},
+        "toast.noPathPlayback": {"en": "No path playback state deleted", "zh": "没有可删除的路径播放状态"},
+        "toast.flipHEnabled": {"en": "Horizontal flip enabled", "zh": "水平翻转已开启"},
+        "toast.flipHDisabled": {"en": "Horizontal flip disabled", "zh": "水平翻转已关闭"},
+        "toast.flipVEnabled": {"en": "Vertical flip enabled", "zh": "垂直翻转已开启"},
+        "toast.flipVDisabled": {"en": "Vertical flip disabled", "zh": "垂直翻转已关闭"},
+        "toast.rotatedLeft": {"en": "Rotated left", "zh": "已向左旋转"},
+        "toast.rotatedRight": {"en": "Rotated right", "zh": "已向右旋转"},
+        "toast.crystallizeEnabled": {"en": "Crystallize enabled", "zh": "晶格化已开启"},
+        "toast.crystallizeDisabled": {"en": "Crystallize disabled", "zh": "晶格化已关闭"}
+    })
 
     QtObject {
         id: uiMetrics
@@ -22,12 +131,6 @@ ApplicationWindow {
         readonly property int menuItemVerticalPadding: 0
         readonly property int menuItemHorizontalPadding: 6
         readonly property int menuFontSize: 12
-        readonly property int toolbarPadding: 8
-        readonly property int toolbarButtonSize: 36
-        readonly property int toolbarRadius: 10
-        readonly property int toolbarSpacing: 6
-        readonly property int toolbarBottomMargin: 24
-        readonly property int toolbarImplicitHeight: 52
     }
 
     Component {
@@ -312,6 +415,14 @@ ApplicationWindow {
         return appMode === "color_photo";
     }
 
+    function t(key) {
+        var entry = translations[key];
+        if (!entry) {
+            return key;
+        }
+        return entry[uiLanguage] || entry["en"] || key;
+    }
+
     function maxAllowedWindowWidth() {
         return Math.max(320, Screen.desktopAvailableWidth - 32);
     }
@@ -339,16 +450,16 @@ ApplicationWindow {
     }
 
     function isTopMenuTitleVisible(title) {
-        if (title === "Mode") {
+        if (title === t("menu.mode")) {
             return true;
         }
-        if (title === "File") {
+        if (title === t("menu.file")) {
             return isPhotoSwitchingMode() || isColorPhotoMode();
         }
-        if (title === "Timer") {
+        if (title === t("menu.timer")) {
             return isPhotoSwitchingMode();
         }
-        if (title === "Color Sense Tools") {
+        if (title === t("menu.colorSenseTools")) {
             return isColorBlocksMode();
         }
         return true;
@@ -379,15 +490,15 @@ ApplicationWindow {
 
     function timerEndModeText(mode) {
         if (mode === "auto_next") {
-            return "Auto Next";
+            return t("timer.autoNext");
         }
         if (mode === "hold") {
-            return "Stay On Current";
+            return t("timer.stayCurrent");
         }
         if (mode === "overtime") {
-            return "Overtime Count Up";
+            return t("timer.overtime");
         }
-        return "Unknown";
+        return mode;
     }
 
     function shouldBlinkTimerValue() {
@@ -722,7 +833,7 @@ ApplicationWindow {
 
         ensureColorBlocksPaletteLength(colorBlocksStripeCount + step);
         persistColorBlocksSettings();
-        showActionToast("Color count: " + colorBlocksStripeCount);
+        showActionToast(t("toast.colorCount") + colorBlocksStripeCount);
     }
 
     function refreshColorBlocksAction() {
@@ -736,7 +847,7 @@ ApplicationWindow {
         }
         colorBlocksPalette = nextPalette;
         regenerateColorBlocksShapes();
-        showActionToast("Colors refreshed");
+        showActionToast(t("toast.colorsRefreshed"));
     }
 
     function toggleColorBlocksShapeModeAction() {
@@ -749,12 +860,12 @@ ApplicationWindow {
         if (nextValue) {
             regenerateColorBlocksShapes();
         }
-        showActionToast(nextValue ? "Shape mode enabled" : "Shape mode disabled");
+        showActionToast(nextValue ? t("toast.shapeEnabled") : t("toast.shapeDisabled"));
     }
 
     function copyColorBlocksAction() {
         if (!backend || !isColorBlocksMode() || colorBlocksStripeCount <= 0) {
-            showActionToast("Cannot copy colors");
+            showActionToast(t("toast.cannotCopyColors"));
             return;
         }
 
@@ -765,7 +876,7 @@ ApplicationWindow {
                 String(Math.max(1, Math.round(colorBlocksCanvas.width))),
                 String(Math.max(1, Math.round(colorBlocksCanvas.height)))
             );
-            showActionToast(copiedPatch ? "Color copied" : "Cannot copy colors");
+            showActionToast(copiedPatch ? t("toast.colorCopied") : t("toast.cannotCopyColors"));
             return;
         }
 
@@ -774,7 +885,7 @@ ApplicationWindow {
             String(Math.max(1, Math.round(colorBlocksCanvas.width))),
             String(Math.max(1, Math.round(colorBlocksCanvas.height)))
         );
-        showActionToast(copiedStripes ? "Colors copied" : "Cannot copy colors");
+        showActionToast(copiedStripes ? t("toast.colorsCopied") : t("toast.cannotCopyColors"));
     }
 
     function openColorThresholdEditPopup(key) {
@@ -784,13 +895,13 @@ ApplicationWindow {
 
         colorThresholdEditKey = key;
         if (key === "min_luma") {
-            colorThresholdEditTitle = "Set Min Luma (0-1)";
+            colorThresholdEditTitle = t("threshold.minLuma");
             colorThresholdEditValue = formatThresholdValue(colorBlocksMinLuma);
         } else if (key === "max_luma") {
-            colorThresholdEditTitle = "Set Max Luma (0-1)";
+            colorThresholdEditTitle = t("threshold.maxLuma");
             colorThresholdEditValue = formatThresholdValue(colorBlocksMaxLuma);
         } else if (key === "min_saturation") {
-            colorThresholdEditTitle = "Set Min Saturation (0-1)";
+            colorThresholdEditTitle = t("threshold.minSaturation");
             colorThresholdEditValue = formatThresholdValue(colorBlocksMinSaturation);
         } else {
             return;
@@ -824,7 +935,7 @@ ApplicationWindow {
         }
 
         if (nextMinLuma > nextMaxLuma) {
-            showActionToast("Min luma must be <= max luma");
+            showActionToast(t("toast.lumaInvalid"));
             return;
         }
 
@@ -838,7 +949,7 @@ ApplicationWindow {
             colorBlocksMinLuma = nextMinLuma;
             colorBlocksMaxLuma = nextMaxLuma;
             colorBlocksMinSaturation = nextMinSaturation;
-            showActionToast("Color thresholds updated");
+            showActionToast(t("toast.thresholdsUpdated"));
         }
 
         colorThresholdEditPopup.close();
@@ -912,6 +1023,8 @@ ApplicationWindow {
         timerEndModeMenu.close();
         windowMenu.close();
         colorSenseToolsMenu.close();
+        settingsMenu.close();
+        languageMenu.close();
     }
 
     function syncTopMenus() {
@@ -969,6 +1082,17 @@ ApplicationWindow {
         });
     }
 
+    function setUiLanguageAction(language) {
+        if (!backend || uiLanguage === language) {
+            return;
+        }
+
+        backend.set_ui_language(language);
+        uiLanguage = language;
+        closeTopMenus();
+        showActionToast(t("toast.language"));
+    }
+
     function selectImageFolderAction() {
         if (!backend || !(isPhotoSwitchingMode() || isColorPhotoMode())) {
             return;
@@ -977,7 +1101,7 @@ ApplicationWindow {
         saveCurrentImageViewStateNow();
         if (backend.select_image_root_path()) {
             refreshRecentImagePaths();
-            showActionToast("Opening image folder...");
+            showActionToast(t("toast.openingFolder"));
         }
     }
 
@@ -989,9 +1113,9 @@ ApplicationWindow {
         saveCurrentImageViewStateNow();
         if (backend.set_image_root_path(path)) {
             refreshRecentImagePaths();
-            showActionToast("Opening " + path);
+            showActionToast(t("toast.opening") + path);
         } else {
-            showActionToast("Cannot switch to selected path");
+            showActionToast(t("toast.cannotSwitchPath"));
         }
     }
 
@@ -1038,9 +1162,9 @@ ApplicationWindow {
 
         saveCurrentImageViewStateNow();
         if (backend.reset_image_order_and_pick_random()) {
-            showActionToast("Random image");
+            showActionToast(t("toast.randomImage"));
         } else {
-            showActionToast("Cannot refresh image list");
+            showActionToast(t("toast.cannotRefreshList"));
         }
     }
 
@@ -1049,7 +1173,7 @@ ApplicationWindow {
             return;
         }
 
-        var switchedTo = playModeValue === "SEQ" ? "Random mode enabled" : "Sequence mode enabled";
+        var switchedTo = playModeValue === "SEQ" ? t("toast.randomMode") : t("toast.sequenceMode");
         backend.toggle_play_mode();
         showActionToast(switchedTo);
     }
@@ -1061,7 +1185,7 @@ ApplicationWindow {
 
         var enabling = !stayOnTop;
         backend.toggle_stay_on_top();
-        showActionToast(enabling ? "Stay on top enabled" : "Stay on top disabled");
+        showActionToast(enabling ? t("toast.stayTopEnabled") : t("toast.stayTopDisabled"));
     }
 
     function toggleTimerPauseAction() {
@@ -1071,7 +1195,7 @@ ApplicationWindow {
 
         var willResume = timerPaused;
         backend.pause();
-        showActionToast(willResume ? "Timer resumed" : "Timer paused");
+        showActionToast(willResume ? t("toast.timerResumed") : t("toast.timerPaused"));
     }
 
     function resetTimerAction() {
@@ -1080,7 +1204,7 @@ ApplicationWindow {
         }
 
         backend.reset_timer();
-        showActionToast("Timer reset");
+        showActionToast(t("toast.timerReset"));
     }
 
     function applyTimerValueAction(value) {
@@ -1089,7 +1213,7 @@ ApplicationWindow {
         }
 
         backend.set_timer_value(value);
-        showActionToast("Timer set to " + value + "s");
+        showActionToast(t("toast.timerSetTo") + value + t("unit.secondsSuffix"));
     }
 
     function setTimerEndModeAction(mode) {
@@ -1098,7 +1222,7 @@ ApplicationWindow {
         }
 
         backend.set_timer_end_mode(mode);
-        showActionToast("Timer end mode: " + timerEndModeText(mode));
+        showActionToast(t("toast.timerEndMode") + timerEndModeText(mode));
     }
 
     function togglePrestartCountdownAction() {
@@ -1108,7 +1232,7 @@ ApplicationWindow {
 
         var willEnable = !prestartCountdownEnabled;
         backend.toggle_prestart_countdown_enabled();
-        showActionToast(willEnable ? "3-second pre-start enabled" : "3-second pre-start disabled");
+        showActionToast(willEnable ? t("toast.prestartEnabled") : t("toast.prestartDisabled"));
     }
 
     function openTimerEditPopup() {
@@ -1134,16 +1258,16 @@ ApplicationWindow {
         var imagePath = activeImagePath();
         var viewport = activeImageViewport();
         if (!imagePath || !viewport) {
-            showActionToast("Cannot copy current image");
+            showActionToast(t("toast.cannotCopyImage"));
             return;
         }
 
         viewport.grabToImage(function(result) {
             var tempPath = backend.allocate_temp_capture_path();
             if (result && tempPath && result.saveToFile(tempPath) && backend.copy_rendered_image(tempPath)) {
-                showActionToast("Image copied");
+                showActionToast(t("toast.imageCopied"));
             } else {
-                showActionToast("Cannot copy current image");
+                showActionToast(t("toast.cannotCopyImage"));
             }
         });
     }
@@ -1154,7 +1278,7 @@ ApplicationWindow {
         }
 
         if (backend.copy_image_path()) {
-            showActionToast("Image path copied");
+            showActionToast(t("toast.imagePathCopied"));
         }
     }
 
@@ -1164,9 +1288,9 @@ ApplicationWindow {
         }
 
         if (backend.reveal_current_image_in_explorer()) {
-            showActionToast("Revealed in file explorer");
+            showActionToast(t("toast.revealed"));
         } else {
-            showActionToast("Cannot reveal current image");
+            showActionToast(t("toast.cannotReveal"));
         }
     }
 
@@ -1180,7 +1304,7 @@ ApplicationWindow {
             if (viewport) {
                 viewport.resetView();
             }
-            showActionToast("Current image state reset");
+            showActionToast(t("toast.imageStateReset"));
         }
     }
 
@@ -1190,9 +1314,9 @@ ApplicationWindow {
         }
 
         if (backend.reset_current_path_image_states()) {
-            showActionToast("Current path image states reset");
+            showActionToast(t("toast.pathStatesReset"));
         } else {
-            showActionToast("No image states to reset");
+            showActionToast(t("toast.noPathStates"));
         }
     }
 
@@ -1203,9 +1327,9 @@ ApplicationWindow {
 
         if (backend.delete_path_playback_state()) {
             refreshRecentImagePaths();
-            showActionToast("Path playback state deleted");
+            showActionToast(t("toast.pathPlaybackDeleted"));
         } else {
-            showActionToast("No path playback state deleted");
+            showActionToast(t("toast.noPathPlayback"));
         }
     }
 
@@ -1216,7 +1340,7 @@ ApplicationWindow {
 
         flipHorizontalEnabled = !flipHorizontalEnabled;
         saveGlobalFlipStateNow();
-        showActionToast(flipHorizontalEnabled ? "Horizontal flip enabled" : "Horizontal flip disabled");
+        showActionToast(flipHorizontalEnabled ? t("toast.flipHEnabled") : t("toast.flipHDisabled"));
     }
 
     function toggleVerticalFlipAction() {
@@ -1226,7 +1350,7 @@ ApplicationWindow {
 
         flipVerticalEnabled = !flipVerticalEnabled;
         saveGlobalFlipStateNow();
-        showActionToast(flipVerticalEnabled ? "Vertical flip enabled" : "Vertical flip disabled");
+        showActionToast(flipVerticalEnabled ? t("toast.flipVEnabled") : t("toast.flipVDisabled"));
     }
 
     function rotateCurrentImage(deltaDegrees) {
@@ -1252,13 +1376,13 @@ ApplicationWindow {
 
     function rotateLeftAction() {
         if (rotateCurrentImage(-90)) {
-            showActionToast("Rotated left");
+            showActionToast(t("toast.rotatedLeft"));
         }
     }
 
     function rotateRightAction() {
         if (rotateCurrentImage(90)) {
-            showActionToast("Rotated right");
+            showActionToast(t("toast.rotatedRight"));
         }
     }
 
@@ -1268,7 +1392,7 @@ ApplicationWindow {
         }
 
         backend.set_color_photo_crystallize_enabled(!colorPhotoCrystallizeEnabled);
-        showActionToast(!colorPhotoCrystallizeEnabled ? "Crystallize enabled" : "Crystallize disabled");
+        showActionToast(!colorPhotoCrystallizeEnabled ? t("toast.crystallizeEnabled") : t("toast.crystallizeDisabled"));
     }
 
     function exportProtectedShortVideoAction() {
@@ -1297,7 +1421,7 @@ ApplicationWindow {
 
         Menu {
             id: fileMenu
-            title: "File"
+            title: t("menu.file")
             popupType: Popup.Item
             implicitWidth: 220
             width: implicitWidth
@@ -1324,17 +1448,17 @@ ApplicationWindow {
             onAboutToHide: debugLog("fileMenu aboutToHide")
 
             CompactMenuItem {
-                text: "Set Image Folder..."
+                text: t("file.setImageFolder")
                 onTriggered: selectImageFolderAction()
             }
 
             CompactSubMenuItem {
-                text: "Recent Paths"
+                text: t("file.recentPaths")
                 presentedMenu: recentPathsMenu
 
                 Menu {
                     id: recentPathsMenu
-                    title: "Recent Paths"
+                    title: t("file.recentPaths")
                     parent: Overlay.overlay
                     property bool pointerInside: submenuHover.hovered
                     popupType: Popup.Item
@@ -1369,7 +1493,7 @@ ApplicationWindow {
                     onAboutToHide: debugLog("recentPathsMenu aboutToHide")
 
                     CompactMenuItem {
-                        text: "(No recent paths)"
+                        text: t("file.noRecentPaths")
                         enabled: false
                         visible: recentImagePaths.length === 0
                     }
@@ -1395,24 +1519,24 @@ ApplicationWindow {
             }
 
             CompactMenuItem {
-                text: "Delete Path Playback State..."
+                text: t("file.deletePathPlaybackState")
                 onTriggered: deletePathPlaybackStateAction()
             }
 
             CompactMenuItem {
-                text: "Refresh List Order + Random Image"
+                text: t("file.refreshRandom")
                 onTriggered: resetImageOrderAndPickRandomAction()
             }
 
             CompactMenuItem {
-                text: "Reset Current Path Image States"
+                text: t("file.resetPathImageStates")
                 onTriggered: resetCurrentPathImageStatesAction()
             }
         }
 
         Menu {
             id: windowMenu
-            title: "Window"
+            title: t("menu.window")
             popupType: Popup.Item
             implicitWidth: 248
             width: implicitWidth
@@ -1440,27 +1564,27 @@ ApplicationWindow {
             CompactMenuItem {
                 visible: protectedVideoExportAvailable
                 enabled: protectedVideoExportAvailable
-                text: protectedVideoExportBusy ? "Protected Video Export... (Busy)" : "Protected Video Export..."
+                text: protectedVideoExportBusy ? t("window.exportBusy") : t("window.export")
                 onTriggered: exportProtectedShortVideoAction()
             }
 
             CompactMenuItem {
                 visible: !protectedVideoExportAvailable
                 enabled: false
-                text: "Protected Video Export Unavailable"
+                text: t("window.exportUnavailable")
             }
 
             MenuSeparator {}
 
             CompactMenuItem {
-                text: (stayOnTop ? "✓ " : "") + "Stay On Top"
+                text: (stayOnTop ? "✓ " : "") + t("window.stayOnTop")
                 onTriggered: toggleStayOnTopAction()
             }
         }
 
         Menu {
             id: modeMenu
-            title: "Mode"
+            title: t("menu.mode")
             popupType: Popup.Item
             implicitWidth: 220
             width: implicitWidth
@@ -1486,24 +1610,24 @@ ApplicationWindow {
             onAboutToHide: debugLog("modeMenu aboutToHide")
 
             CompactMenuItem {
-                text: (isPhotoSwitchingMode() ? "✓ " : "") + "Photo Switching"
+                text: (isPhotoSwitchingMode() ? "✓ " : "") + t("mode.photoSwitching")
                 onTriggered: setAppModeAction("photo_switching")
             }
 
             CompactMenuItem {
-                text: (isColorBlocksMode() ? "✓ " : "") + "Color Blocks"
+                text: (isColorBlocksMode() ? "✓ " : "") + t("mode.colorBlocks")
                 onTriggered: setAppModeAction("color_blocks")
             }
 
             CompactMenuItem {
-                text: (isColorPhotoMode() ? "✓ " : "") + "Color Photo"
+                text: (isColorPhotoMode() ? "✓ " : "") + t("mode.colorPhoto")
                 onTriggered: setAppModeAction("color_photo")
             }
         }
 
         Menu {
             id: timerMenu
-            title: "Timer"
+            title: t("menu.timer")
             popupType: Popup.Item
             implicitWidth: 220
             width: implicitWidth
@@ -1530,37 +1654,37 @@ ApplicationWindow {
             onAboutToHide: debugLog("timerMenu aboutToHide")
 
             CompactMenuItem {
-                text: timerPaused ? "Resume Timer" : "Pause Timer"
+                text: timerPaused ? t("timer.resume") : t("timer.pause")
                 onTriggered: toggleTimerPauseAction()
             }
 
             CompactMenuItem {
-                text: "Set Timer..."
+                text: t("timer.set")
                 onTriggered: openTimerEditPopup()
             }
 
             CompactMenuItem {
-                text: "Reset Timer"
+                text: t("timer.reset")
                 onTriggered: resetTimerAction()
             }
 
             CompactMenuItem {
-                text: (playModeValue === "RND" ? "✓ " : "") + "Random Play"
+                text: (playModeValue === "RND" ? "✓ " : "") + t("timer.randomPlay")
                 onTriggered: togglePlayModeAction()
             }
 
             CompactMenuItem {
-                text: (prestartCountdownEnabled ? "✓ " : "") + "3-second Pre-start Countdown"
+                text: (prestartCountdownEnabled ? "✓ " : "") + t("timer.prestart")
                 onTriggered: togglePrestartCountdownAction()
             }
 
             CompactSubMenuItem {
-                text: "Timer End Mode"
+                text: t("timer.endMode")
                 presentedMenu: timerEndModeMenu
 
                 Menu {
                     id: timerEndModeMenu
-                    title: "Timer End Mode"
+                    title: t("timer.endMode")
                     parent: Overlay.overlay
                     property bool pointerInside: timerEndModeHover.hovered
                     popupType: Popup.Item
@@ -1592,17 +1716,17 @@ ApplicationWindow {
                     onAboutToHide: debugLog("timerEndModeMenu aboutToHide")
 
                     CompactMenuItem {
-                        text: (timerEndMode === "auto_next" ? "✓ " : "") + "Auto Next Image"
+                        text: (timerEndMode === "auto_next" ? "✓ " : "") + t("timer.autoNext")
                         onTriggered: setTimerEndModeAction("auto_next")
                     }
 
                     CompactMenuItem {
-                        text: (timerEndMode === "hold" ? "✓ " : "") + "Stay On Current Image"
+                        text: (timerEndMode === "hold" ? "✓ " : "") + t("timer.stayCurrent")
                         onTriggered: setTimerEndModeAction("hold")
                     }
 
                     CompactMenuItem {
-                        text: (timerEndMode === "overtime" ? "✓ " : "") + "Overtime Count Up"
+                        text: (timerEndMode === "overtime" ? "✓ " : "") + t("timer.overtime")
                         onTriggered: setTimerEndModeAction("overtime")
                     }
                 }
@@ -1611,7 +1735,7 @@ ApplicationWindow {
 
         Menu {
             id: colorSenseToolsMenu
-            title: "Color Sense Tools"
+            title: t("menu.colorSenseTools")
             popupType: Popup.Item
             implicitWidth: 220
             width: implicitWidth
@@ -1638,45 +1762,114 @@ ApplicationWindow {
             onAboutToHide: debugLog("colorSenseToolsMenu aboutToHide")
 
             CompactMenuItem {
-                text: "Increase Colors"
+                text: t("color.increase")
                 onTriggered: adjustColorBlocksCount(1)
             }
 
             CompactMenuItem {
-                text: "Decrease Colors"
+                text: t("color.decrease")
                 onTriggered: adjustColorBlocksCount(-1)
             }
 
             CompactMenuItem {
-                text: "Refresh Colors"
+                text: t("color.refresh")
                 onTriggered: refreshColorBlocksAction()
             }
 
-            CompactMenuItem {
-                text: "Copy Colors"
-                onTriggered: copyColorBlocksAction()
-            }
 
             CompactMenuItem {
-                text: (colorBlocksShapeModeEnabled ? "✓ " : "") + "Shape Mode"
+                text: (colorBlocksShapeModeEnabled ? "✓ " : "") + t("color.shapeMode")
                 onTriggered: toggleColorBlocksShapeModeAction()
             }
 
             MenuSeparator {}
 
             CompactMenuItem {
-                text: "Set Min Luma..."
+                text: t("color.setMinLuma")
                 onTriggered: openColorThresholdEditPopup("min_luma")
             }
 
             CompactMenuItem {
-                text: "Set Max Luma..."
+                text: t("color.setMaxLuma")
                 onTriggered: openColorThresholdEditPopup("max_luma")
             }
 
             CompactMenuItem {
-                text: "Set Min Saturation..."
+                text: t("color.setMinSaturation")
                 onTriggered: openColorThresholdEditPopup("min_saturation")
+            }
+        }
+
+        Menu {
+            id: settingsMenu
+            title: t("menu.settings")
+            popupType: Popup.Item
+            implicitWidth: 180
+            width: implicitWidth
+            delegate: compactMenuItemDelegate
+            padding: 0
+            topPadding: 0
+            bottomPadding: 0
+            leftPadding: 0
+            rightPadding: 0
+            font.pixelSize: uiMetrics.menuFontSize
+            palette.text: "#f2f2f2"
+            palette.buttonText: "#f2f2f2"
+            palette.windowText: "#f2f2f2"
+            palette.highlight: "#3a3a3a"
+            palette.highlightedText: "#f2f2f2"
+            background: Rectangle {
+                color: "#202020"
+                border.color: "#5a5a5a"
+                border.width: 1
+                radius: 6
+            }
+
+            CompactSubMenuItem {
+                text: t("menu.language")
+                presentedMenu: languageMenu
+
+                Menu {
+                    id: languageMenu
+                    title: t("menu.language")
+                    parent: Overlay.overlay
+                    property bool pointerInside: languageMenuHover.hovered
+                    popupType: Popup.Item
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    implicitWidth: 160
+                    width: implicitWidth
+                    delegate: compactMenuItemDelegate
+                    padding: 0
+                    topPadding: 0
+                    bottomPadding: 0
+                    leftPadding: 0
+                    rightPadding: 0
+                    font.pixelSize: uiMetrics.menuFontSize
+                    palette.text: "#f2f2f2"
+                    palette.buttonText: "#f2f2f2"
+                    palette.windowText: "#f2f2f2"
+                    palette.highlight: "#3a3a3a"
+                    palette.highlightedText: "#f2f2f2"
+                    background: Rectangle {
+                        color: "#202020"
+                        border.color: "#5a5a5a"
+                        border.width: 1
+                        radius: 6
+                    }
+                    HoverHandler {
+                        id: languageMenuHover
+                    }
+
+                    CompactMenuItem {
+                        text: (uiLanguage === "en" ? "✓ " : "") + t("language.english")
+                        onTriggered: setUiLanguageAction("en")
+                    }
+
+                    CompactMenuItem {
+                        text: (uiLanguage === "zh" ? "✓ " : "") + t("language.chinese")
+                        onTriggered: setUiLanguageAction("zh")
+                    }
+                }
             }
         }
     }
@@ -1710,88 +1903,70 @@ ApplicationWindow {
         onAboutToHide: debugLog("imageContextMenu aboutToHide")
 
         CompactMenuItem {
-            text: timerPaused ? "Resume Timer" : "Pause Timer"
-            onTriggered: toggleTimerPauseAction()
+            text: t("context.previousImage")
+            onTriggered: prevAction()
         }
 
         CompactMenuItem {
-            text: "Reset Timer"
-            onTriggered: resetTimerAction()
+            text: t("context.previousImageInFolder")
+            onTriggered: prevInFolderAction()
         }
 
         CompactMenuItem {
-            text: (playModeValue === "RND" ? "✓ " : "") + "Random Play"
-            onTriggered: togglePlayModeAction()
-        }
-
-        MenuSeparator {}
-
-        CompactMenuItem {
-            text: "Set Image Folder..."
-            onTriggered: selectImageFolderAction()
+            text: t("context.nextImageInFolder")
+            onTriggered: nextInFolderAction()
         }
 
         CompactMenuItem {
-            text: "Random Image"
-            onTriggered: resetImageOrderAndPickRandomAction()
+            text: t("context.nextImage")
+            onTriggered: nextAction()
         }
 
         MenuSeparator {}
 
         CompactMenuItem {
-            text: "Copy Image"
+            text: t("context.copyImage")
             onTriggered: copyImageAction()
         }
 
         CompactMenuItem {
-            text: "Copy Image Path"
+            text: t("context.copyImagePath")
             onTriggered: copyImagePathAction()
         }
 
         CompactMenuItem {
-            text: "Show In File Explorer"
+            text: t("context.showInExplorer")
             visible: canRevealInExplorer
             onTriggered: revealInExplorerAction()
         }
 
         CompactMenuItem {
-            text: "Reset Current Image State"
+            text: t("context.resetCurrentImageState")
             onTriggered: resetCurrentImageStateAction()
-        }
-
-        CompactMenuItem {
-            text: "Reset Current Path Image States"
-            onTriggered: resetCurrentPathImageStatesAction()
         }
 
         MenuSeparator {}
 
         CompactMenuItem {
-            text: (flipHorizontalEnabled ? "✓ " : "") + "Flip Horizontal"
+            text: (flipHorizontalEnabled ? "✓ " : "") + t("context.flipHorizontal")
             onTriggered: toggleHorizontalFlipAction()
         }
 
         CompactMenuItem {
-            text: (flipVerticalEnabled ? "✓ " : "") + "Flip Vertical"
+            text: (flipVerticalEnabled ? "✓ " : "") + t("context.flipVertical")
             onTriggered: toggleVerticalFlipAction()
         }
 
         CompactMenuItem {
-            text: "Rotate -90"
+            text: t("context.rotateLeft")
             onTriggered: rotateLeftAction()
         }
 
         CompactMenuItem {
-            text: "Rotate +90"
+            text: t("context.rotateRight")
             onTriggered: rotateRightAction()
         }
 
-        MenuSeparator {}
-
-        CompactMenuItem {
-            text: (stayOnTop ? "✓ " : "") + "Stay On Top"
-            onTriggered: toggleStayOnTopAction()
-        }
     }
 
     Menu {
@@ -1822,53 +1997,10 @@ ApplicationWindow {
         onAboutToShow: debugLog("colorBlocksContextMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")")
         onAboutToHide: debugLog("colorBlocksContextMenu aboutToHide")
 
-        CompactMenuItem {
-            text: "Increase Colors"
-            onTriggered: adjustColorBlocksCount(1)
-        }
 
         CompactMenuItem {
-            text: "Decrease Colors"
-            onTriggered: adjustColorBlocksCount(-1)
-        }
-
-        CompactMenuItem {
-            text: "Refresh Colors"
-            onTriggered: refreshColorBlocksAction()
-        }
-
-        CompactMenuItem {
-            text: "Copy Colors"
+            text: t("color.copyColors")
             onTriggered: copyColorBlocksAction()
-        }
-
-        CompactMenuItem {
-            text: (colorBlocksShapeModeEnabled ? "✓ " : "") + "Shape Mode"
-            onTriggered: toggleColorBlocksShapeModeAction()
-        }
-
-        MenuSeparator {}
-
-        CompactMenuItem {
-            text: "Set Min Luma..."
-            onTriggered: openColorThresholdEditPopup("min_luma")
-        }
-
-        CompactMenuItem {
-            text: "Set Max Luma..."
-            onTriggered: openColorThresholdEditPopup("max_luma")
-        }
-
-        CompactMenuItem {
-            text: "Set Min Saturation..."
-            onTriggered: openColorThresholdEditPopup("min_saturation")
-        }
-
-        MenuSeparator {}
-
-        CompactMenuItem {
-            text: (stayOnTop ? "✓ " : "") + "Stay On Top"
-            onTriggered: toggleStayOnTopAction()
         }
     }
 
@@ -1901,81 +2033,65 @@ ApplicationWindow {
         onAboutToHide: debugLog("colorPhotoContextMenu aboutToHide")
 
         CompactMenuItem {
-            text: "Set Image Folder..."
-            onTriggered: selectImageFolderAction()
+            text: t("context.previousImage")
+            onTriggered: prevAction()
         }
 
         CompactMenuItem {
-            text: (playModeValue === "RND" ? "✓ " : "") + "Random Play"
-            onTriggered: togglePlayModeAction()
-        }
-
-        CompactMenuItem {
-            text: "Next Random Photo"
-            onTriggered: resetImageOrderAndPickRandomAction()
+            text: t("context.nextImage")
+            onTriggered: nextAction()
         }
 
         MenuSeparator {}
 
         CompactMenuItem {
-            text: "Copy Image"
+            text: t("context.copyImage")
             onTriggered: copyImageAction()
         }
 
         CompactMenuItem {
-            text: "Copy Image Path"
+            text: t("context.copyImagePath")
             onTriggered: copyImagePathAction()
         }
 
         CompactMenuItem {
-            text: "Show In File Explorer"
+            text: t("context.showInExplorer")
             visible: canRevealInExplorer
             onTriggered: revealInExplorerAction()
         }
 
         CompactMenuItem {
-            text: "Reset Current Image State"
+            text: t("context.resetCurrentImageState")
             onTriggered: resetCurrentImageStateAction()
-        }
-
-        CompactMenuItem {
-            text: "Reset Current Path Image States"
-            onTriggered: resetCurrentPathImageStatesAction()
         }
 
         MenuSeparator {}
 
         CompactMenuItem {
-            text: (flipHorizontalEnabled ? "✓ " : "") + "Flip Horizontal"
+            text: (flipHorizontalEnabled ? "✓ " : "") + t("context.flipHorizontal")
             onTriggered: toggleHorizontalFlipAction()
         }
 
         CompactMenuItem {
-            text: (flipVerticalEnabled ? "✓ " : "") + "Flip Vertical"
+            text: (flipVerticalEnabled ? "✓ " : "") + t("context.flipVertical")
             onTriggered: toggleVerticalFlipAction()
         }
 
         CompactMenuItem {
-            text: "Rotate -90"
+            text: t("context.rotateLeft")
             onTriggered: rotateLeftAction()
         }
 
         CompactMenuItem {
-            text: "Rotate +90"
+            text: t("context.rotateRight")
             onTriggered: rotateRightAction()
         }
 
         CompactMenuItem {
-            text: (colorPhotoCrystallizeEnabled ? "✓ " : "") + "Crystallize"
+            text: (colorPhotoCrystallizeEnabled ? "✓ " : "") + t("context.crystallize")
             onTriggered: toggleColorPhotoCrystallizeAction()
         }
 
-        MenuSeparator {}
-
-        CompactMenuItem {
-            text: (stayOnTop ? "✓ " : "") + "Stay On Top"
-            onTriggered: toggleStayOnTopAction()
-        }
     }
 
     Connections {
@@ -2025,6 +2141,12 @@ ApplicationWindow {
 
         function onSetstayontop(enabled) {
             stayOnTop = enabled;
+        }
+
+        function onSetuilanguage(language) {
+            if (language === "en" || language === "zh") {
+                uiLanguage = language;
+            }
         }
 
         function onSettimerendmode(mode) {
@@ -2467,191 +2589,6 @@ ApplicationWindow {
                 }
             }
 
-            Frame {
-                id: photoSwitchingToolbar
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: uiMetrics.toolbarBottomMargin
-                z: 30
-                padding: uiMetrics.toolbarPadding
-                implicitWidth: photoSwitchingToolbarRow.implicitWidth + uiMetrics.toolbarPadding * 2
-                implicitHeight: uiMetrics.toolbarImplicitHeight
-                width: implicitWidth
-                height: implicitHeight
-
-                background: Rectangle {
-                    color: "#101010"
-                    radius: uiMetrics.toolbarRadius
-                    opacity: 0.5
-                }
-
-                Row {
-                    id: photoSwitchingToolbarRow
-                    anchors.centerIn: parent
-                    spacing: uiMetrics.toolbarSpacing
-
-                    Button {
-                        id: photoPrevButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/prev.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: photoPrevButton.down ? 1.0 : (photoPrevButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: prevAction()
-                    }
-
-                    Button {
-                        id: photoPrevFolderButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/prev_in_folder.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: photoPrevFolderButton.down ? 1.0 : (photoPrevFolderButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: prevInFolderAction()
-                    }
-
-                    Button {
-                        id: photoFlipHButton
-                        width: 44
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: "Flip H"
-                            anchors.centerIn: parent
-                            font.pixelSize: 12
-                            color: photoFlipHButton.down ? "#ffffff" : (flipHorizontalEnabled ? "#f2f2f2" : "#cccccc")
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        onClicked: toggleHorizontalFlipAction()
-                    }
-
-                    Button {
-                        id: photoFlipVButton
-                        width: 44
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: "Flip V"
-                            anchors.centerIn: parent
-                            font.pixelSize: 12
-                            color: photoFlipVButton.down ? "#ffffff" : (flipVerticalEnabled ? "#f2f2f2" : "#cccccc")
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        onClicked: toggleVerticalFlipAction()
-                    }
-
-                    Button {
-                        id: photoRotatePlusButton
-                        width: 42
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: "+90"
-                            anchors.centerIn: parent
-                            font.pixelSize: 12
-                            color: photoRotatePlusButton.down ? "#ffffff" : "#cccccc"
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        onClicked: rotateRightAction()
-                    }
-
-                    Button {
-                        id: photoRotateMinusButton
-                        width: 42
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: "-90"
-                            anchors.centerIn: parent
-                            font.pixelSize: 12
-                            color: photoRotateMinusButton.down ? "#ffffff" : "#cccccc"
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        onClicked: rotateLeftAction()
-                    }
-
-                    Button {
-                        id: photoNextFolderButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/next_in_folder.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: photoNextFolderButton.down ? 1.0 : (photoNextFolderButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: nextInFolderAction()
-                    }
-
-                    Button {
-                        id: photoNextButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/next.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: photoNextButton.down ? 1.0 : (photoNextButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: nextAction()
-                    }
-                }
-            }
-
         }
 
         Item {
@@ -2734,7 +2671,7 @@ ApplicationWindow {
                 Text {
                     id: colorBlocksCountLabel
                     anchors.centerIn: parent
-                    text: "Colors: " + colorBlocksStripeCount
+                    text: t("label.colors") + ": " + colorBlocksStripeCount
                     color: "white"
                     font.pixelSize: 13
                 }
@@ -2950,92 +2887,6 @@ ApplicationWindow {
                 }
             }
 
-            Frame {
-                id: colorPhotoToolbar
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: uiMetrics.toolbarBottomMargin
-                z: 30
-                padding: uiMetrics.toolbarPadding
-                implicitWidth: colorPhotoToolbarRow.implicitWidth + uiMetrics.toolbarPadding * 2
-                implicitHeight: uiMetrics.toolbarImplicitHeight
-                width: implicitWidth
-                height: implicitHeight
-
-                background: Rectangle {
-                    color: "#101010"
-                    radius: uiMetrics.toolbarRadius
-                    opacity: 0.5
-                }
-
-                Row {
-                    id: colorPhotoToolbarRow
-                    anchors.centerIn: parent
-                    spacing: uiMetrics.toolbarSpacing
-
-                    Button {
-                        id: colorPhotoPrevButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/prev.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: colorPhotoPrevButton.down ? 1.0 : (colorPhotoPrevButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: prevAction()
-                    }
-
-                    Button {
-                        id: colorPhotoNextButton
-                        width: uiMetrics.toolbarButtonSize
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Item {
-                            Image {
-                                anchors.centerIn: parent
-                                width: 24
-                                height: 24
-                                source: "./images/next.png"
-                                fillMode: Image.PreserveAspectFit
-                                opacity: colorPhotoNextButton.down ? 1.0 : (colorPhotoNextButton.hovered ? 0.85 : 0.62)
-                            }
-                        }
-                        onClicked: nextAction()
-                    }
-
-                    Button {
-                        id: colorPhotoCrystalButton
-                        width: 68
-                        height: uiMetrics.toolbarButtonSize
-                        background: Rectangle {
-                            color: "transparent"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: colorPhotoCrystallizeEnabled ? "Crystal On" : "Crystal"
-                            anchors.centerIn: parent
-                            font.pixelSize: 12
-                            color: colorPhotoCrystalButton.down ? "#ffffff" : (colorPhotoCrystallizeEnabled ? "#f2f2f2" : "#cccccc")
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        onClicked: toggleColorPhotoCrystallizeAction()
-                    }
-                }
-            }
-
         }
         Popup {
             id: timerEditPopup
@@ -3063,7 +2914,7 @@ ApplicationWindow {
                 spacing: 10
 
                 Label {
-                    text: "Set seconds"
+                    text: t("popup.setSeconds")
                     color: "white"
                     Layout.fillWidth: true
                 }
@@ -3071,7 +2922,7 @@ ApplicationWindow {
                 TextField {
                     id: timerEditInput
                     text: String(timerSeconds)
-                    placeholderText: "seconds"
+                    placeholderText: t("popup.seconds")
                     selectByMouse: true
                     Layout.fillWidth: true
                     validator: IntValidator {
@@ -3096,12 +2947,12 @@ ApplicationWindow {
                     }
 
                     Button {
-                        text: "Cancel"
+                        text: t("popup.cancel")
                         onClicked: timerEditPopup.close()
                     }
 
                     Button {
-                        text: "Apply"
+                        text: t("popup.apply")
                         onClicked: {
                             if (timerEditInput.acceptableInput && timerEditInput.text.length > 0) {
                                 applyTimerValueAction(timerEditInput.text);
@@ -3179,12 +3030,12 @@ ApplicationWindow {
                     }
 
                     Button {
-                        text: "Cancel"
+                        text: t("popup.cancel")
                         onClicked: colorThresholdEditPopup.close()
                     }
 
                     Button {
-                        text: "Apply"
+                        text: t("popup.apply")
                         onClicked: applyColorThresholdEditAction()
                     }
                 }

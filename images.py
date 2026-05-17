@@ -1,4 +1,5 @@
 import json
+import locale
 import os
 import random
 import sys
@@ -17,6 +18,8 @@ default_window_width = 840
 default_window_height = 1120
 default_timer_seconds = 90
 default_stay_on_top = True
+default_ui_language = 'en'
+ui_languages = ('en', 'zh')
 app_mode_photo_switching = 'photo_switching'
 app_mode_color_blocks = 'color_blocks'
 app_mode_color_photo = 'color_photo'
@@ -69,6 +72,31 @@ def get_app_data_dir():
         return os.path.dirname(sys.executable)
 
 
+def detect_system_ui_language():
+    locale_candidates = []
+    for key in ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
+        value = os.environ.get(key)
+        if value:
+            locale_candidates.append(value)
+
+    try:
+        locale_candidates.append(locale.getlocale()[0])
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        locale_candidates.append(locale.getdefaultlocale()[0])
+    except (TypeError, ValueError, AttributeError):
+        pass
+
+    for candidate in locale_candidates:
+        normalized = str(candidate or '').strip().lower()
+        if normalized.startswith('zh') or normalized.startswith('cn'):
+            return 'zh'
+
+    return default_ui_language
+
+
 class ImageList:
     def __init__(self):
         self.img_list = []
@@ -85,6 +113,7 @@ class ImageList:
         self.playback_profile = default_playback_profile
         self.random_play_mode = False
         self.stay_on_top = default_stay_on_top
+        self.ui_language = detect_system_ui_language()
         self.timer_end_mode = default_timer_end_mode
         self.prestart_countdown_enabled = False
         self.color_practice_enabled = default_color_practice_enabled
@@ -139,6 +168,13 @@ class ImageList:
     def _normalize_timer_end_mode(raw_value):
         value = str(raw_value).strip().lower()
         if value in timer_end_modes:
+            return value
+        return ''
+
+    @staticmethod
+    def _normalize_ui_language(raw_value):
+        value = str(raw_value).strip().lower()
+        if value in ui_languages:
             return value
         return ''
 
@@ -379,6 +415,7 @@ class ImageList:
         # Keep startup behavior: first timer tick should trigger initial image load.
         self.cur_timer = 0
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
+        self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
 
         modes_data = data.get('modes')
         legacy_root_path = str(data.get('image_root_path', '')).strip()
@@ -495,6 +532,7 @@ class ImageList:
             'timer_seconds': int(photo_mode.get('timer_seconds', default_timer_seconds)),
             'random_play_mode': self._to_bool(photo_mode.get('random_play_mode', False), False),
             'stay_on_top': self.stay_on_top,
+            'ui_language': self.ui_language,
             'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
             'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
             'playback_profile': self.playback_profile,
@@ -1498,6 +1536,19 @@ class ImageList:
         if self._to_bool(color_photo_mode.get('crystallize_enabled', False), False) == new_value:
             return False
         color_photo_mode['crystallize_enabled'] = new_value
+        self.saveConfig()
+        return True
+
+    def getUiLanguage(self):
+        return self.ui_language
+
+    def setUiLanguage(self, language):
+        normalized = self._normalize_ui_language(language)
+        if normalized == '':
+            return False
+        if self.ui_language == normalized:
+            return False
+        self.ui_language = normalized
         self.saveConfig()
         return True
 
