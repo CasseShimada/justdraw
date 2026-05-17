@@ -821,6 +821,7 @@ class Backend(QObject):
         self.image_source_loading_worker = None
         self.image_source_loading_dialog = None
         self.image_source_loading_reopen_on_failure = False
+        self.image_source_loading_reopen_after_cleanup = False
         self.videoexportbusychanged.connect(self._handle_video_export_busy_changed)
         self.videoexportprogress.connect(self._handle_video_export_progress)
         self.videoexportfinished.connect(self._handle_video_export_finished)
@@ -1122,12 +1123,28 @@ class Backend(QObject):
     def quit_application(self):
         global APPLICATION_EXIT_REQUESTED
         APPLICATION_EXIT_REQUESTED = True
+        self.image_source_loading_reopen_after_cleanup = False
+        self._wait_for_image_source_loading_thread()
         for window in self._iter_auxiliary_windows():
             try:
                 window.close()
             except Exception:
                 pass
         app.quit()
+
+    def _wait_for_image_source_loading_thread(self):
+        thread = self.image_source_loading_thread
+        if thread is None:
+            return
+
+        try:
+            if thread.isRunning():
+                logger.info('Waiting for image source loading thread to finish before exit')
+                thread.quit()
+                thread.wait()
+        except RuntimeError:
+            # Qt may already be tearing this thread wrapper down.
+            pass
 
     def _iter_auxiliary_windows(self):
         for window in (
@@ -1259,6 +1276,7 @@ class Backend(QObject):
         self.image_source_loading_reopen_on_failure = bool(reopen_on_failure)
 
         self.image_source_loading_thread = QThread()
+        self.image_source_loading_thread.setObjectName('ImageSourceLoadThread')
         self.image_source_loading_worker = ImageSourceLoadWorker(source_path)
         self.image_source_loading_worker.moveToThread(self.image_source_loading_thread)
         self.image_source_loading_thread.started.connect(self.image_source_loading_worker.run)
@@ -1274,6 +1292,11 @@ class Backend(QObject):
     def _cleanup_image_source_load_worker(self):
         self.image_source_loading_thread = None
         self.image_source_loading_worker = None
+        if self.image_source_loading_reopen_after_cleanup and not APPLICATION_EXIT_REQUESTED:
+            self.image_source_loading_reopen_after_cleanup = False
+            self.ensure_image_source_for_current_mode(async_open=True)
+        else:
+            self.image_source_loading_reopen_after_cleanup = False
 
     @pyqtSlot(str, object, str)
     def _handle_image_source_load_finished(self, source_path, image_list, error_message):
@@ -1281,8 +1304,6 @@ class Backend(QObject):
 
         if self.image_source_loading_dialog is not None:
             self.image_source_loading_dialog.finish()
-        self.image_source_loading_thread = None
-        self.image_source_loading_worker = None
 
         source_path_value = str(source_path or '').strip()
         image_items = list(image_list or [])
@@ -1295,7 +1316,7 @@ class Backend(QObject):
             self.emit_mode_state(reload_image=True)
             self.toast('Failed to open image source: {0}'.format(error_text))
             if reopen_on_failure:
-                self.ensure_image_source_for_current_mode(async_open=True)
+                self.image_source_loading_reopen_after_cleanup = True
             return
 
         if len(image_items) == 0 or not imgList._switchToImageList(image_items, source_path_value):
@@ -1303,7 +1324,7 @@ class Backend(QObject):
             self.emit_mode_state(reload_image=True)
             self.toast('Cannot open image source: {0}'.format(source_path_value))
             if reopen_on_failure:
-                self.ensure_image_source_for_current_mode(async_open=True)
+                self.image_source_loading_reopen_after_cleanup = True
             return
 
         self.emit_mode_state(reload_image=True)
