@@ -195,20 +195,6 @@ ApplicationWindow {
         }
     }
 
-    component CompactSubMenuArrow : Text {
-        color: parent && parent.enabled ? "#f2f2f2" : "#777777"
-        font.pixelSize: 14
-        font.bold: true
-        text: "\u203a"
-        width: 14
-        height: uiMetrics.menuItemHeight
-        anchors.right: parent ? parent.right : undefined
-        anchors.rightMargin: uiMetrics.menuItemHorizontalPadding
-        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-    }
-
     Component {
         id: compactMenuItemDelegate
 
@@ -219,6 +205,7 @@ ApplicationWindow {
         id: control
         property int textElideMode: Text.ElideRight
         readonly property bool hasSubMenu: !!control.subMenu
+        implicitWidth: control.contentItem.implicitWidth + control.leftPadding + control.rightPadding
         implicitHeight: uiMetrics.menuItemHeight
         height: implicitHeight
         padding: 0
@@ -233,6 +220,11 @@ ApplicationWindow {
         palette.highlight: "#3a3a3a"
         palette.highlightedText: "#f2f2f2"
 
+        indicator: Item {
+            implicitWidth: 0
+            implicitHeight: uiMetrics.menuItemHeight
+        }
+
         contentItem: Text {
             text: control.text
             leftPadding: 0
@@ -243,12 +235,88 @@ ApplicationWindow {
             elide: control.textElideMode
         }
 
-        arrow: CompactSubMenuArrow {
+        arrow: Item {
             visible: control.hasSubMenu
+            implicitWidth: visible ? 22 : 0
+            implicitHeight: uiMetrics.menuItemHeight
+            width: implicitWidth
+            height: implicitHeight
+
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: uiMetrics.menuItemHorizontalPadding
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u203a"
+                color: control.enabled ? "#f2f2f2" : "#777777"
+                font.pixelSize: 14
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
         }
 
         background: Rectangle {
+            implicitHeight: uiMetrics.menuItemHeight
             color: control.highlighted ? "#3a3a3a" : "transparent"
+            radius: 4
+        }
+    }
+
+    Component {
+        id: compactGeneratedMenuIndicator
+
+        Item {
+            implicitWidth: 0
+            implicitHeight: uiMetrics.menuItemHeight
+        }
+    }
+
+    Component {
+        id: compactGeneratedMenuContent
+
+        Text {
+            property var control
+            text: control ? control.text : ""
+            leftPadding: 0
+            rightPadding: 18
+            color: control && control.enabled ? "#f2f2f2" : "#777777"
+            font.pixelSize: uiMetrics.menuFontSize
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+    }
+
+    Component {
+        id: compactGeneratedMenuArrow
+
+        Item {
+            property var control
+            implicitWidth: 22
+            implicitHeight: uiMetrics.menuItemHeight
+            width: implicitWidth
+            height: implicitHeight
+
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: uiMetrics.menuItemHorizontalPadding
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u203a"
+                color: control && control.enabled ? "#f2f2f2" : "#777777"
+                font.pixelSize: 14
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+    }
+
+    Component {
+        id: compactGeneratedMenuBackground
+
+        Rectangle {
+            property var control
+            implicitHeight: uiMetrics.menuItemHeight
+            color: control && control.highlighted ? "#3a3a3a" : "transparent"
             radius: 4
         }
     }
@@ -941,6 +1009,31 @@ ApplicationWindow {
         colorSenseToolsMenu.close();
         settingsMenu.close();
         languageMenu.close();
+    }
+
+    function styleGeneratedSubMenuItem(item) {
+        if (!item) {
+            return;
+        }
+
+        item.padding = 0;
+        item.topPadding = uiMetrics.menuItemVerticalPadding;
+        item.bottomPadding = uiMetrics.menuItemVerticalPadding;
+        item.leftPadding = uiMetrics.menuItemHorizontalPadding;
+        item.rightPadding = 22;
+        item.font.pixelSize = uiMetrics.menuFontSize;
+        item.implicitHeight = uiMetrics.menuItemHeight;
+        item.height = uiMetrics.menuItemHeight;
+        item.indicator = compactGeneratedMenuIndicator.createObject(item);
+        item.contentItem = compactGeneratedMenuContent.createObject(item, { "control": item });
+        item.arrow = compactGeneratedMenuArrow.createObject(item, { "control": item });
+        item.background = compactGeneratedMenuBackground.createObject(item, { "control": item });
+    }
+
+    function styleGeneratedSubMenuItems() {
+        styleGeneratedSubMenuItem(fileMenu.itemAt(1));
+        styleGeneratedSubMenuItem(timerMenu.itemAt(5));
+        styleGeneratedSubMenuItem(settingsMenu.itemAt(0));
     }
 
     function syncTopMenus() {
@@ -2221,6 +2314,7 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        styleGeneratedSubMenuItems();
         refreshRecentImagePaths();
         syncTopMenus();
         Qt.callLater(function() {
