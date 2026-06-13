@@ -14,6 +14,7 @@ ApplicationWindow {
         "menu.mode": {"en": "Mode", "zh": "模式"},
         "menu.timer": {"en": "Timer", "zh": "计时器"},
         "menu.colorSenseTools": {"en": "Color Sense Tools", "zh": "色感工具"},
+        "menu.mosaic": {"en": "Mosaic", "zh": "马赛克"},
         "menu.settings": {"en": "Settings", "zh": "设置"},
         "menu.language": {"en": "Language", "zh": "语言"},
         "language.english": {"en": "English", "zh": "英语"},
@@ -61,7 +62,8 @@ ApplicationWindow {
         "context.flipVertical": {"en": "Flip Vertical", "zh": "垂直翻转"},
         "context.rotateLeft": {"en": "Rotate -90", "zh": "旋转 -90"},
         "context.rotateRight": {"en": "Rotate +90", "zh": "旋转 +90"},
-        "context.crystallize": {"en": "Crystallize", "zh": "晶格化"},
+        "mosaic.enable": {"en": "Enable Mosaic", "zh": "启用马赛克"},
+        "mosaic.size": {"en": "Mosaic Size", "zh": "马赛克大小"},
         "label.colors": {"en": "Colors", "zh": "颜色"},
         "popup.setSeconds": {"en": "Set seconds", "zh": "设置秒数"},
         "popup.seconds": {"en": "seconds", "zh": "秒"},
@@ -113,8 +115,8 @@ ApplicationWindow {
         "toast.flipVDisabled": {"en": "Vertical flip disabled", "zh": "垂直翻转已关闭"},
         "toast.rotatedLeft": {"en": "Rotated left", "zh": "已向左旋转"},
         "toast.rotatedRight": {"en": "Rotated right", "zh": "已向右旋转"},
-        "toast.crystallizeEnabled": {"en": "Crystallize enabled", "zh": "晶格化已开启"},
-        "toast.crystallizeDisabled": {"en": "Crystallize disabled", "zh": "晶格化已关闭"}
+        "toast.mosaicEnabled": {"en": "Mosaic enabled", "zh": "马赛克已开启"},
+        "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"}
     })
 
     QtObject {
@@ -353,7 +355,11 @@ ApplicationWindow {
     property real colorBlocksMinSaturation: 0.35
     property bool colorBlocksShapeModeEnabled: false
 
-    property bool colorPhotoCrystallizeEnabled: false
+    property bool photoSwitchingMosaicEnabled: false
+    property bool colorPhotoMosaicEnabled: false
+    property int mosaicDownsampleFactor: 16
+    property int minMosaicDownsampleFactor: 4
+    property int maxMosaicDownsampleFactor: 64
     property bool protectedVideoExportAvailable: false
     property bool protectedVideoExportBusy: false
 
@@ -445,6 +451,9 @@ ApplicationWindow {
         }
         if (title === t("menu.colorSenseTools")) {
             return isColorBlocksMode();
+        }
+        if (title === t("menu.mosaic")) {
+            return isPhotoSwitchingMode() || isColorPhotoMode();
         }
         return true;
     }
@@ -1007,6 +1016,7 @@ ApplicationWindow {
         timerEndModeMenu.close();
         windowMenu.close();
         colorSenseToolsMenu.close();
+        mosaicMenu.close();
         settingsMenu.close();
         languageMenu.close();
     }
@@ -1395,13 +1405,50 @@ ApplicationWindow {
         }
     }
 
-    function toggleColorPhotoCrystallizeAction() {
+    function activeMosaicEnabled() {
+        if (isPhotoSwitchingMode()) {
+            return photoSwitchingMosaicEnabled;
+        }
+        if (isColorPhotoMode()) {
+            return colorPhotoMosaicEnabled;
+        }
+        return false;
+    }
+
+    function togglePhotoSwitchingMosaicAction() {
+        if (!backend || !isPhotoSwitchingMode()) {
+            return;
+        }
+
+        backend.set_photo_switching_mosaic_enabled(!photoSwitchingMosaicEnabled);
+        showActionToast(!photoSwitchingMosaicEnabled ? t("toast.mosaicEnabled") : t("toast.mosaicDisabled"));
+    }
+
+    function toggleColorPhotoMosaicAction() {
         if (!backend || !isColorPhotoMode()) {
             return;
         }
 
-        backend.set_color_photo_crystallize_enabled(!colorPhotoCrystallizeEnabled);
-        showActionToast(!colorPhotoCrystallizeEnabled ? t("toast.crystallizeEnabled") : t("toast.crystallizeDisabled"));
+        backend.set_color_photo_mosaic_enabled(!colorPhotoMosaicEnabled);
+        showActionToast(!colorPhotoMosaicEnabled ? t("toast.mosaicEnabled") : t("toast.mosaicDisabled"));
+    }
+
+    function toggleActiveMosaicAction() {
+        if (isPhotoSwitchingMode()) {
+            togglePhotoSwitchingMosaicAction();
+        } else if (isColorPhotoMode()) {
+            toggleColorPhotoMosaicAction();
+        }
+    }
+
+    function setMosaicDownsampleFactorAction(value) {
+        if (!backend) {
+            return;
+        }
+
+        var factor = Math.round(value);
+        factor = Math.max(minMosaicDownsampleFactor, Math.min(maxMosaicDownsampleFactor, factor));
+        backend.set_mosaic_downsample_factor(factor);
     }
 
     function exportProtectedShortVideoAction() {
@@ -1788,6 +1835,96 @@ ApplicationWindow {
         }
 
         Menu {
+            id: mosaicMenu
+            title: t("menu.mosaic")
+            popupType: Popup.Item
+            implicitWidth: 240
+            width: implicitWidth
+            visible: isPhotoSwitchingMode() || isColorPhotoMode()
+            delegate: compactMenuItemDelegate
+            padding: 0
+            topPadding: 0
+            bottomPadding: 0
+            leftPadding: 0
+            rightPadding: 0
+            font.pixelSize: uiMetrics.menuFontSize
+            palette.text: "#f2f2f2"
+            palette.buttonText: "#f2f2f2"
+            palette.windowText: "#f2f2f2"
+            palette.highlight: "#3a3a3a"
+            palette.highlightedText: "#f2f2f2"
+            background: Rectangle {
+                color: "#202020"
+                border.color: "#5a5a5a"
+                border.width: 1
+                radius: 6
+            }
+            onAboutToShow: debugLog("mosaicMenu aboutToShow at (" + x + "," + y + ") size=(" + width + "x" + height + ")")
+            onAboutToHide: debugLog("mosaicMenu aboutToHide")
+
+            CompactMenuItem {
+                text: (activeMosaicEnabled() ? "✓ " : "") + t("mosaic.enable")
+                onTriggered: toggleActiveMosaicAction()
+            }
+
+            MenuSeparator {}
+
+            MenuItem {
+                implicitWidth: mosaicMenu.width
+                implicitHeight: 64
+                height: implicitHeight
+                padding: 0
+                enabled: isPhotoSwitchingMode() || isColorPhotoMode()
+
+                contentItem: ColumnLayout {
+                    spacing: 4
+                    anchors.fill: parent
+                    anchors.leftMargin: uiMetrics.menuItemHorizontalPadding
+                    anchors.rightMargin: uiMetrics.menuItemHorizontalPadding
+                    anchors.topMargin: 6
+                    anchors.bottomMargin: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Text {
+                            text: t("mosaic.size")
+                            color: "#f2f2f2"
+                            font.pixelSize: uiMetrics.menuFontSize
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            text: String(mosaicDownsampleFactor)
+                            color: "#cfcfcf"
+                            font.pixelSize: uiMetrics.menuFontSize
+                            horizontalAlignment: Text.AlignRight
+                            Layout.preferredWidth: 32
+                        }
+                    }
+
+                    Slider {
+                        id: mosaicSizeSlider
+                        Layout.fillWidth: true
+                        from: minMosaicDownsampleFactor
+                        to: maxMosaicDownsampleFactor
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        live: true
+                        value: mosaicDownsampleFactor
+                        onMoved: setMosaicDownsampleFactorAction(value)
+                    }
+                }
+
+                background: Rectangle {
+                    color: "transparent"
+                }
+            }
+        }
+
+        Menu {
             id: settingsMenu
             title: t("menu.settings")
             popupType: Popup.Item
@@ -2063,11 +2200,6 @@ ApplicationWindow {
             onTriggered: rotateRightAction()
         }
 
-        CompactMenuItem {
-            text: (colorPhotoCrystallizeEnabled ? "✓ " : "") + t("context.crystallize")
-            onTriggered: toggleColorPhotoCrystallizeAction()
-        }
-
     }
 
     Connections {
@@ -2203,8 +2335,19 @@ ApplicationWindow {
             }
         }
 
-        function onSetcolorphotocrystallizeenabled(enabled) {
-            colorPhotoCrystallizeEnabled = enabled;
+        function onSetphotoswitchingmosaicenabled(enabled) {
+            photoSwitchingMosaicEnabled = enabled;
+        }
+
+        function onSetcolorphotomosaicenabled(enabled) {
+            colorPhotoMosaicEnabled = enabled;
+        }
+
+        function onSetmosaicdownsamplefactor(factor) {
+            mosaicDownsampleFactor = Math.max(
+                minMosaicDownsampleFactor,
+                Math.min(maxMosaicDownsampleFactor, Math.round(factor))
+            );
         }
 
         function onSetprotectedvideoexportavailable(enabled) {
@@ -2445,12 +2588,30 @@ ApplicationWindow {
                 onHeightChanged: applyImageGeometry()
 
                 Image {
+                    id: photoSwitchingSourceMeta
+                    visible: false
+                    source: photoSwitchingImagePath
+                    asynchronous: true
+                    autoTransform: true
+                }
+
+                Image {
                     id: photoSwitchingImage
                     source: photoSwitchingImagePath
                     asynchronous: true
                     autoTransform: true
                     mipmap: true
-                    smooth: true
+                    smooth: !photoSwitchingMosaicEnabled
+                    sourceSize.width: (photoSwitchingMosaicEnabled
+                        && photoSwitchingSourceMeta.status === Image.Ready
+                        && photoSwitchingSourceMeta.sourceSize.width > 0)
+                        ? Math.max(8, Math.round(photoSwitchingSourceMeta.sourceSize.width / mosaicDownsampleFactor))
+                        : 0
+                    sourceSize.height: (photoSwitchingMosaicEnabled
+                        && photoSwitchingSourceMeta.status === Image.Ready
+                        && photoSwitchingSourceMeta.sourceSize.height > 0)
+                        ? Math.max(8, Math.round(photoSwitchingSourceMeta.sourceSize.height / mosaicDownsampleFactor))
+                        : 0
                     fillMode: Image.PreserveAspectFit
                     transform: [
                         Scale {
@@ -2787,16 +2948,16 @@ ApplicationWindow {
                     asynchronous: true
                     autoTransform: true
                     mipmap: true
-                    smooth: !colorPhotoCrystallizeEnabled
-                    sourceSize.width: (colorPhotoCrystallizeEnabled
+                    smooth: !colorPhotoMosaicEnabled
+                    sourceSize.width: (colorPhotoMosaicEnabled
                         && colorPhotoSourceMeta.status === Image.Ready
                         && colorPhotoSourceMeta.sourceSize.width > 0)
-                        ? Math.max(8, Math.round(colorPhotoSourceMeta.sourceSize.width / 24))
+                        ? Math.max(8, Math.round(colorPhotoSourceMeta.sourceSize.width / mosaicDownsampleFactor))
                         : 0
-                    sourceSize.height: (colorPhotoCrystallizeEnabled
+                    sourceSize.height: (colorPhotoMosaicEnabled
                         && colorPhotoSourceMeta.status === Image.Ready
                         && colorPhotoSourceMeta.sourceSize.height > 0)
-                        ? Math.max(8, Math.round(colorPhotoSourceMeta.sourceSize.height / 24))
+                        ? Math.max(8, Math.round(colorPhotoSourceMeta.sourceSize.height / mosaicDownsampleFactor))
                         : 0
                     fillMode: Image.PreserveAspectFit
                     transform: [

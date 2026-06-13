@@ -6,7 +6,7 @@ JustDraw is a desktop reference viewer for drawing practice. It combines a timed
 
 - `Photo Switching` mode for timed reference rotation
 - `Color Blocks` mode for quick palette and shape drills
-- `Color Photo` mode for color-study browsing with an optional crystallized look
+- `Color Photo` mode for color-study browsing with an optional mosaic look
 - per-image zoom / pan / rotation memory
 - per-path playback resume, saved image order, and recent-path history
 - clipboard and file-explorer helpers
@@ -85,7 +85,7 @@ Features:
 - previous / next navigation
 - per-image zoom / pan / rotation persistence
 - global horizontal / vertical flip state
-- optional `Crystallize` display effect for simplified color reading
+- optional `Mosaic` display effect for simplified color reading
 - copy image, copy image path, reveal in file explorer, and reset-state actions
 
 ## Image Sources
@@ -235,7 +235,6 @@ The first launch uses the system language: Chinese systems start in Chinese, and
 - reset current image state
 - flip horizontal / vertical
 - rotate `-90` / `+90`
-- crystallize
 
 ## Clipboard And Explorer Integration
 
@@ -339,7 +338,8 @@ When running as a packaged app:
 - photo-switching pre-start countdown toggle
 - color-block stripe count and thresholds
 - color-block shape-mode toggle
-- color-photo crystallize toggle
+- color-photo mosaic toggle
+- global mosaic size
 - window size
 - stay-on-top flag
 - UI language

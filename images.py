@@ -35,6 +35,9 @@ default_color_practice_min_luma = 0.22
 default_color_practice_max_luma = 0.82
 default_color_practice_min_saturation = 0.35
 default_color_blocks_shape_mode_enabled = False
+default_mosaic_downsample_factor = 16
+min_mosaic_downsample_factor = 4
+max_mosaic_downsample_factor = 64
 default_protected_video_export_duration_seconds = 15
 playback_state_file_name = 'justdraw_playback_state.json'
 
@@ -124,6 +127,8 @@ class ImageList:
         self.last_image_path = ''
         self.global_flip_horizontal = False
         self.global_flip_vertical = False
+        self.photo_switching_mosaic_enabled = False
+        self.mosaic_downsample_factor = default_mosaic_downsample_factor
 
         self.timer_paused = False
         self.max_timer_value = default_timer_seconds
@@ -195,6 +200,15 @@ class ImageList:
         return value
 
     @staticmethod
+    def _normalize_mosaic_downsample_factor(raw_value):
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return default_mosaic_downsample_factor
+
+        return max(min_mosaic_downsample_factor, min(max_mosaic_downsample_factor, value))
+
+    @staticmethod
     def _to_float(value, default):
         try:
             return float(value)
@@ -233,7 +247,7 @@ class ImageList:
                 'image_root_path': '',
                 'last_image_path': '',
                 'random_play_mode': False,
-                'crystallize_enabled': False,
+                'mosaic_enabled': False,
             },
         }
 
@@ -416,6 +430,9 @@ class ImageList:
         self.cur_timer = 0
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
         self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
+        self.mosaic_downsample_factor = self._normalize_mosaic_downsample_factor(
+            data.get('mosaic_downsample_factor', default_mosaic_downsample_factor)
+        )
 
         modes_data = data.get('modes')
         legacy_root_path = str(data.get('image_root_path', '')).strip()
@@ -472,8 +489,8 @@ class ImageList:
             data.get('color_photo_random_play_mode', False),
             False
         )
-        self.mode_states[app_mode_color_photo]['crystallize_enabled'] = self._to_bool(
-            data.get('color_photo_crystallize_enabled', False),
+        self.mode_states[app_mode_color_photo]['mosaic_enabled'] = self._to_bool(
+            data.get('color_photo_mosaic_enabled', False),
             False
         )
         self.mode_states[app_mode_color_blocks]['stripe_count'] = max(
@@ -493,6 +510,7 @@ class ImageList:
                 target = self.mode_states[mode_name]
                 for key, value in incoming.items():
                     target[key] = value
+            self.mode_states[app_mode_photo_switching].pop('mosaic_enabled', None)
 
         saved_mode = self._normalize_app_mode(data.get('app_mode', ''))
         if saved_mode == '':
@@ -552,7 +570,8 @@ class ImageList:
             'color_photo_image_root_path': str(color_photo_mode.get('image_root_path', '')).strip(),
             'color_photo_last_image_path': str(color_photo_mode.get('last_image_path', '')).strip(),
             'color_photo_random_play_mode': self._to_bool(color_photo_mode.get('random_play_mode', False), False),
-            'color_photo_crystallize_enabled': self._to_bool(color_photo_mode.get('crystallize_enabled', False), False),
+            'color_photo_mosaic_enabled': self._to_bool(color_photo_mode.get('mosaic_enabled', False), False),
+            'mosaic_downsample_factor': self.getMosaicDownsampleFactor(),
             # Keep legacy key for backward compatibility.
             'auto_next_on_timer_end': str(photo_mode.get('timer_end_mode', default_timer_end_mode)) == timer_end_mode_auto_next,
             'last_image_path': str(photo_mode.get('last_image_path', '')).strip(),
@@ -1526,16 +1545,37 @@ class ImageList:
         self.saveConfig()
         return True
 
-    def getColorPhotoCrystallizeEnabled(self):
-        color_photo_mode = self.mode_states.get(app_mode_color_photo, {})
-        return self._to_bool(color_photo_mode.get('crystallize_enabled', False), False)
+    def getPhotoSwitchingMosaicEnabled(self):
+        return self._to_bool(self.photo_switching_mosaic_enabled, False)
 
-    def setColorPhotoCrystallizeEnabled(self, enabled):
+    def setPhotoSwitchingMosaicEnabled(self, enabled):
+        new_value = self._to_bool(enabled, False)
+        if self.photo_switching_mosaic_enabled == new_value:
+            return False
+        self.photo_switching_mosaic_enabled = new_value
+        return True
+
+    def getMosaicDownsampleFactor(self):
+        return self._normalize_mosaic_downsample_factor(self.mosaic_downsample_factor)
+
+    def setMosaicDownsampleFactor(self, factor):
+        new_value = self._normalize_mosaic_downsample_factor(factor)
+        if self.getMosaicDownsampleFactor() == new_value:
+            return False
+        self.mosaic_downsample_factor = new_value
+        self.saveConfig()
+        return True
+
+    def getColorPhotoMosaicEnabled(self):
+        color_photo_mode = self.mode_states.get(app_mode_color_photo, {})
+        return self._to_bool(color_photo_mode.get('mosaic_enabled', False), False)
+
+    def setColorPhotoMosaicEnabled(self, enabled):
         color_photo_mode = self.mode_states.get(app_mode_color_photo, {})
         new_value = self._to_bool(enabled, False)
-        if self._to_bool(color_photo_mode.get('crystallize_enabled', False), False) == new_value:
+        if self._to_bool(color_photo_mode.get('mosaic_enabled', False), False) == new_value:
             return False
-        color_photo_mode['crystallize_enabled'] = new_value
+        color_photo_mode['mosaic_enabled'] = new_value
         self.saveConfig()
         return True
 

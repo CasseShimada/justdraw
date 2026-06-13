@@ -787,8 +787,10 @@ class Backend(QObject):
     # set color-blocks shape mode toggle
     setcolorblockshapemodeenabled = pyqtSignal(bool, arguments=['enabled'])
 
-    # set color-photo crystallize toggle
-    setcolorphotocrystallizeenabled = pyqtSignal(bool, arguments=['enabled'])
+    # set mosaic controls
+    setphotoswitchingmosaicenabled = pyqtSignal(bool, arguments=['enabled'])
+    setcolorphotomosaicenabled = pyqtSignal(bool, arguments=['enabled'])
+    setmosaicdownsamplefactor = pyqtSignal(int, arguments=['factor'])
 
     # set ffmpeg-based export availability/busy state
     setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
@@ -998,9 +1000,17 @@ class Backend(QObject):
         global imgList
         self.setcolorblockshapemodeenabled.emit(imgList.getColorBlocksShapeModeEnabled())
 
-    def color_photo_crystallize_enabled(self):
+    def photo_switching_mosaic_enabled(self):
         global imgList
-        self.setcolorphotocrystallizeenabled.emit(imgList.getColorPhotoCrystallizeEnabled())
+        self.setphotoswitchingmosaicenabled.emit(imgList.getPhotoSwitchingMosaicEnabled())
+
+    def color_photo_mosaic_enabled(self):
+        global imgList
+        self.setcolorphotomosaicenabled.emit(imgList.getColorPhotoMosaicEnabled())
+
+    def mosaic_downsample_factor(self):
+        global imgList
+        self.setmosaicdownsamplefactor.emit(imgList.getMosaicDownsampleFactor())
 
     def protected_video_export_available(self):
         self.setprotectedvideoexportavailable.emit(bool(self.video_tools.get('available')))
@@ -1020,7 +1030,9 @@ class Backend(QObject):
         self.color_practice_thresholds()
         self.color_block_settings()
         self.color_block_shape_mode_enabled()
-        self.color_photo_crystallize_enabled()
+        self.photo_switching_mosaic_enabled()
+        self.color_photo_mosaic_enabled()
+        self.mosaic_downsample_factor()
         self.protected_video_export_available()
         self.protected_video_export_busy_state()
         self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
@@ -1887,10 +1899,24 @@ class Backend(QObject):
         return changed
 
     @pyqtSlot(bool, result=bool)
-    def set_color_photo_crystallize_enabled(self, enabled):
+    def set_photo_switching_mosaic_enabled(self, enabled):
         global imgList
-        changed = imgList.setColorPhotoCrystallizeEnabled(enabled)
-        self.color_photo_crystallize_enabled()
+        changed = imgList.setPhotoSwitchingMosaicEnabled(enabled)
+        self.photo_switching_mosaic_enabled()
+        return changed
+
+    @pyqtSlot(bool, result=bool)
+    def set_color_photo_mosaic_enabled(self, enabled):
+        global imgList
+        changed = imgList.setColorPhotoMosaicEnabled(enabled)
+        self.color_photo_mosaic_enabled()
+        return changed
+
+    @pyqtSlot(int, result=bool)
+    def set_mosaic_downsample_factor(self, factor):
+        global imgList
+        changed = imgList.setMosaicDownsampleFactor(factor)
+        self.mosaic_downsample_factor()
         return changed
 
     @pyqtSlot(result=bool)
