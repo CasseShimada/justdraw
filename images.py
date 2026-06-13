@@ -46,6 +46,7 @@ timer_end_mode_hold = 'hold'
 timer_end_mode_overtime = 'overtime'
 timer_end_modes = (timer_end_mode_auto_next, timer_end_mode_hold, timer_end_mode_overtime)
 default_timer_end_mode = timer_end_mode_auto_next
+default_timer_notification_enabled = False
 
 # keep created TemporaryDirectory objects here to prevent it from deletion (will be deleted after program exit)
 zip_extract_temp_paths = []
@@ -118,6 +119,7 @@ class ImageList:
         self.stay_on_top = default_stay_on_top
         self.ui_language = detect_system_ui_language()
         self.timer_end_mode = default_timer_end_mode
+        self.timer_notification_enabled = default_timer_notification_enabled
         self.prestart_countdown_enabled = False
         self.color_practice_enabled = default_color_practice_enabled
         self.color_practice_sub_mode = default_color_practice_sub_mode
@@ -135,6 +137,7 @@ class ImageList:
         self.cur_timer = 0
         self.timer_expired_hold = False
         self.timer_overtime_seconds = 0
+        self.timer_just_finished = False
         self.total_time_spent = 0
 
         self.window_width = default_window_width
@@ -430,6 +433,10 @@ class ImageList:
         self.cur_timer = 0
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
         self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
+        self.timer_notification_enabled = self._to_bool(
+            data.get('timer_notification_enabled', default_timer_notification_enabled),
+            default_timer_notification_enabled
+        )
         self.mosaic_downsample_factor = self._normalize_mosaic_downsample_factor(
             data.get('mosaic_downsample_factor', default_mosaic_downsample_factor)
         )
@@ -552,6 +559,7 @@ class ImageList:
             'stay_on_top': self.stay_on_top,
             'ui_language': self.ui_language,
             'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
+            'timer_notification_enabled': self.isTimerNotificationEnabled(),
             'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
             'playback_profile': self.playback_profile,
             'color_practice_enabled': legacy_color_enabled,
@@ -1302,7 +1310,10 @@ class ImageList:
 
     def getCurTimer(self, decrement=True):
         if not self.hasImages():
+            self.timer_just_finished = False
             return '--:--'
+
+        self.timer_just_finished = False
 
         if self.timer_paused:
             if self.timer_expired_hold and self.timer_end_mode == timer_end_mode_overtime:
@@ -1324,10 +1335,12 @@ class ImageList:
                 )
             return '00:00'
 
+        previous_timer_value = self.cur_timer
         if decrement:
             self.cur_timer -= 1
 
         if self.cur_timer <= 0:
+            self.timer_just_finished = bool(decrement and previous_timer_value > 0)
             if self.timer_end_mode == timer_end_mode_auto_next:
                 self.change(1)
 
@@ -1362,6 +1375,9 @@ class ImageList:
 
     def getTimerEndMode(self):
         return self.timer_end_mode
+
+    def didTimerJustFinish(self):
+        return bool(self.timer_just_finished)
 
     def isPrestartCountdownEnabled(self):
         return self.prestart_countdown_enabled
@@ -1621,6 +1637,17 @@ class ImageList:
 
     def isTimerPaused(self):
         return self.timer_paused
+
+    def isTimerNotificationEnabled(self):
+        return self._to_bool(self.timer_notification_enabled, default_timer_notification_enabled)
+
+    def setTimerNotificationEnabled(self, enabled):
+        new_value = self._to_bool(enabled, default_timer_notification_enabled)
+        if self.timer_notification_enabled == new_value:
+            return False
+        self.timer_notification_enabled = new_value
+        self.saveConfig()
+        return True
 
     def setTimerEndMode(self, mode):
         normalized = self._normalize_timer_end_mode(mode)

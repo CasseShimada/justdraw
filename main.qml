@@ -38,6 +38,7 @@ ApplicationWindow {
         "timer.reset": {"en": "Reset Timer", "zh": "重置计时器"},
         "timer.randomPlay": {"en": "Random Play", "zh": "随机播放"},
         "timer.prestart": {"en": "3-second Pre-start Countdown", "zh": "3 秒预备倒计时"},
+        "timer.notification": {"en": "Timer Finish Notification", "zh": "计时结束通知"},
         "timer.endMode": {"en": "Timer End Mode", "zh": "计时结束模式"},
         "timer.autoNext": {"en": "Auto Next Image", "zh": "自动下一张"},
         "timer.stayCurrent": {"en": "Stay On Current Image", "zh": "停留当前图片"},
@@ -99,6 +100,8 @@ ApplicationWindow {
         "toast.timerEndMode": {"en": "Timer end mode: ", "zh": "计时结束模式："},
         "toast.prestartEnabled": {"en": "3-second pre-start enabled", "zh": "3 秒预备倒计时已开启"},
         "toast.prestartDisabled": {"en": "3-second pre-start disabled", "zh": "3 秒预备倒计时已关闭"},
+        "toast.timerNotificationEnabled": {"en": "Timer finish notification enabled", "zh": "计时结束通知已开启"},
+        "toast.timerNotificationDisabled": {"en": "Timer finish notification disabled", "zh": "计时结束通知已关闭"},
         "toast.cannotCopyImage": {"en": "Cannot copy current image", "zh": "无法复制当前图片"},
         "toast.imageCopied": {"en": "Image copied", "zh": "图片已复制"},
         "toast.imagePathCopied": {"en": "Image path copied", "zh": "图片路径已复制"},
@@ -335,6 +338,7 @@ ApplicationWindow {
     property bool timerPaused: false
     property bool timerBlinkOn: true
     property string timerEndMode: "auto_next"
+    property bool timerNotificationEnabled: false
     property bool timerExpiredHold: false
     property bool prestartCountdownEnabled: false
     property bool prestartCountdownActive: false
@@ -1042,7 +1046,7 @@ ApplicationWindow {
 
     function styleGeneratedSubMenuItems() {
         styleGeneratedSubMenuItem(fileMenu.itemAt(1));
-        styleGeneratedSubMenuItem(timerMenu.itemAt(5));
+        styleGeneratedSubMenuItem(timerMenu.itemAt(6));
         styleGeneratedSubMenuItem(settingsMenu.itemAt(0));
     }
 
@@ -1252,6 +1256,16 @@ ApplicationWindow {
         var willEnable = !prestartCountdownEnabled;
         backend.toggle_prestart_countdown_enabled();
         showActionToast(willEnable ? t("toast.prestartEnabled") : t("toast.prestartDisabled"));
+    }
+
+    function toggleTimerNotificationAction() {
+        if (!backend || !isPhotoSwitchingMode()) {
+            return;
+        }
+
+        var willEnable = !timerNotificationEnabled;
+        backend.toggle_timer_notification_enabled();
+        showActionToast(willEnable ? t("toast.timerNotificationEnabled") : t("toast.timerNotificationDisabled"));
     }
 
     function openTimerEditPopup() {
@@ -1721,6 +1735,11 @@ ApplicationWindow {
             CompactMenuItem {
                 text: (prestartCountdownEnabled ? "✓ " : "") + t("timer.prestart")
                 onTriggered: togglePrestartCountdownAction()
+            }
+
+            CompactMenuItem {
+                text: (timerNotificationEnabled ? "✓ " : "") + t("timer.notification")
+                onTriggered: toggleTimerNotificationAction()
             }
 
             Menu {
@@ -2259,6 +2278,10 @@ ApplicationWindow {
 
         function onSettimerendmode(mode) {
             timerEndMode = mode;
+        }
+
+        function onSettimernotificationenabled(enabled) {
+            timerNotificationEnabled = enabled;
         }
 
         function onSettimerexpiredhold(enabled) {

@@ -136,6 +136,7 @@ Controls:
 - `Timer -> Reset Timer`
 - `Timer -> Random Play`
 - `Timer -> 3-second Pre-start Countdown`
+- `Timer -> Timer Finish Notification`
 - `Timer -> Timer End Mode`
 
 Timer end modes:
@@ -151,6 +152,7 @@ Display behavior:
 - opening `Set Timer...` pauses the timer while the popup is open
 - if the popup is dismissed without applying a new value, the previous timer state resumes
 - when pre-start countdown is enabled, each fresh timer run starts with a full-screen 3-second countdown overlay
+- when timer-finish notification is enabled, expiry sends a system notification and plays a sound
 
 ## Menus
 
@@ -184,6 +186,7 @@ Visible in `Photo Switching`.
 - `Reset Timer`
 - `Random Play`
 - `3-second Pre-start Countdown`
+- `Timer Finish Notification`
 - `Timer End Mode`
 
 ### Color Sense Tools
@@ -335,6 +338,7 @@ When running as a packaged app:
 - per-mode random-play state
 - photo-switching timer seconds
 - photo-switching timer end mode
+- timer-finish notification toggle
 - photo-switching pre-start countdown toggle
 - color-block stripe count and thresholds
 - color-block shape-mode toggle

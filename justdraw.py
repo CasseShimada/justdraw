@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+import base64
 
 # Avoid Windows style plugin dependency issues in some PyQt6 installations.
 os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
@@ -29,6 +30,7 @@ try:
         QPushButton,
         QProgressBar,
         QSpinBox,
+        QSystemTrayIcon,
         QVBoxLayout,
         QWidget,
     )
@@ -51,6 +53,7 @@ except ImportError:
         QPushButton,
         QProgressBar,
         QSpinBox,
+        QSystemTrayIcon,
         QVBoxLayout,
         QWidget,
     )
@@ -84,6 +87,7 @@ logger.info('Working directory: %s', os.getcwd())
 logger.info('Log file: %s', LOG_FILE_PATH)
 
 APPLICATION_EXIT_REQUESTED = False
+APP_ICON_PATH = ''
 
 
 def qt_message_handler(msg_type, context, message):
@@ -115,12 +119,13 @@ def get_app_resource_dir():
 
 
 app_dir = get_app_resource_dir()
+APP_ICON_PATH = os.path.join(app_dir, 'images', 'icon.png')
 
 imgList = ImageList()
 imgList.load()
 
 app = QApplication(sys.argv)
-app.setWindowIcon(QIcon(os.path.join(app_dir, 'images', 'icon.png')))
+app.setWindowIcon(QIcon(APP_ICON_PATH))
 
 engine = QQmlApplicationEngine()
 engine.quit.connect(app.quit)
@@ -169,6 +174,12 @@ def _qt_internal_move():
     if hasattr(QAbstractItemView, 'DragDropMode'):
         return QAbstractItemView.DragDropMode.InternalMove
     return QAbstractItemView.InternalMove
+
+
+def _qt_tray_information_icon():
+    if hasattr(QSystemTrayIcon, 'MessageIcon'):
+        return QSystemTrayIcon.MessageIcon.Information
+    return QSystemTrayIcon.Information
 
 
 class ProtectedVideoInputListWidget(QListWidget):
@@ -745,6 +756,9 @@ class Backend(QObject):
     # set paused state to drive UI style/animation
     settimerpaused = pyqtSignal(bool, arguments=['enabled'])
 
+    # set whether timer-end system notification is enabled
+    settimernotificationenabled = pyqtSignal(bool, arguments=['enabled'])
+
     # restore per-image view state (scale, offsets and rotation) from persisted path state
     setimageviewstate = pyqtSignal(
         float, float, float, int, bool,
@@ -824,6 +838,7 @@ class Backend(QObject):
         self.image_source_loading_dialog = None
         self.image_source_loading_reopen_on_failure = False
         self.image_source_loading_reopen_after_cleanup = False
+        self.tray_icon = None
         self.videoexportbusychanged.connect(self._handle_video_export_busy_changed)
         self.videoexportprogress.connect(self._handle_video_export_progress)
         self.videoexportfinished.connect(self._handle_video_export_finished)
@@ -834,6 +849,130 @@ class Backend(QObject):
             bool(self.video_tools.get('available')),
             self.video_tools.get('missing_reason', '')
         )
+
+    def _ensure_tray_icon(self):
+        if self.tray_icon is not None:
+            return self.tray_icon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            logger.info('System tray is not available; timer notifications may be limited')
+            return None
+
+        icon = QIcon(APP_ICON_PATH)
+        self.tray_icon = QSystemTrayIcon(icon, app)
+        self.tray_icon.setToolTip('Just Draw!')
+        self.tray_icon.show()
+        return self.tray_icon
+
+    def _play_timer_finished_sound(self):
+        if sys.platform.startswith('win'):
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                return
+            except Exception:
+                logger.exception('Failed to play Windows timer notification sound')
+
+        try:
+            QApplication.beep()
+        except Exception:
+            logger.exception('Failed to play fallback timer notification sound')
+
+    def _show_windows_toast_notification(self, title, message):
+        if not sys.platform.startswith('win'):
+            return False
+
+        icon_uri = QUrl.fromLocalFile(APP_ICON_PATH).toString()
+        script = r'''
+$ErrorActionPreference = "Stop"
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$template = @"
+<toast>
+  <visual>
+    <binding template="ToastGeneric">
+      <image placement="appLogoOverride" src="{ICON_URI}" hint-crop="circle"/>
+      <text>{TITLE}</text>
+      <text>{MESSAGE}</text>
+    </binding>
+  </visual>
+</toast>
+"@
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml($template)
+$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("{APP_ID}")
+$notifier.Show($toast)
+'''
+        escaped_script = (
+            script
+            .replace('{TITLE}', self._escape_xml_text(title))
+            .replace('{MESSAGE}', self._escape_xml_text(message))
+            .replace('{ICON_URI}', self._escape_xml_text(icon_uri))
+            .replace('{APP_ID}', 'JustDraw')
+        )
+        encoded = base64.b64encode(escaped_script.encode('utf-16le')).decode('ascii')
+        try:
+            subprocess.Popen(
+                ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            return True
+        except Exception:
+            logger.exception('Failed to launch Windows toast notification')
+            return False
+
+    @staticmethod
+    def _escape_xml_text(value):
+        return (
+            str(value)
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&apos;')
+        )
+
+    def _show_tray_notification(self, title, message):
+        tray_icon = self._ensure_tray_icon()
+        if tray_icon is None:
+            logger.info('Timer notification fallback: no tray icon available')
+            return False
+        if not QSystemTrayIcon.supportsMessages():
+            logger.info('Timer notification fallback: tray messages are not supported')
+            return False
+
+        tray_icon.showMessage(title, message, _qt_tray_information_icon(), 5000)
+        return True
+
+    def notify_timer_finished(self):
+        global imgList
+        if not imgList.isTimerNotificationEnabled():
+            return
+
+        self._play_timer_finished_sound()
+        title = 'Just Draw!'
+        message = 'Timer finished'
+        logger.info('Timer finished notification requested')
+        tray_notification_sent = self._show_tray_notification(title, message)
+        if tray_notification_sent:
+            logger.info('Timer finished notification sent through tray')
+            return
+
+        windows_toast_requested = self._show_windows_toast_notification(title, message)
+        if windows_toast_requested:
+            logger.info('Timer finished notification requested through Windows toast')
+            return
+
+        logger.info('Timer finished notification fell back to in-app toast')
+        self.toast(message)
+
+    def prepare_timer_notifications(self):
+        global imgList
+        if imgList.isTimerNotificationEnabled():
+            self._ensure_tray_icon()
+            logger.info('Timer notification channel prepared')
 
     def restart_timer_tick_phase(self):
         # Ensure the next decrement happens one full interval after user-triggered resets.
@@ -935,6 +1074,8 @@ class Backend(QObject):
             return
 
         cur_timer = imgList.getCurTimer()
+        if imgList.didTimerJustFinish():
+            self.notify_timer_finished()
 
         if cur_timer == 'expired':
             # set new image
@@ -960,6 +1101,10 @@ class Backend(QObject):
         global imgList
         self.settimerendmode.emit(imgList.getTimerEndMode())
         self.settimerexpiredhold.emit(imgList.isTimerExpiredHold())
+
+    def timer_notification_enabled(self):
+        global imgList
+        self.settimernotificationenabled.emit(imgList.isTimerNotificationEnabled())
 
     def prestart_countdown_enabled(self):
         global imgList
@@ -1038,6 +1183,7 @@ class Backend(QObject):
         self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
         self.settimervalue.emit(imgList.getTimerSeconds())
         self.settimerendmode.emit(imgList.getTimerEndMode())
+        self.timer_notification_enabled()
         self.setprestartenabled.emit(imgList.isPrestartCountdownEnabled())
         if reload_image:
             self.reload()
@@ -1731,6 +1877,15 @@ class Backend(QObject):
         self.settimervalue.emit(imgList.getTimerSeconds())
 
     @pyqtSlot(result=bool)
+    def toggle_timer_notification_enabled(self):
+        global imgList
+        changed = imgList.setTimerNotificationEnabled(not imgList.isTimerNotificationEnabled())
+        if imgList.isTimerNotificationEnabled():
+            self.prepare_timer_notifications()
+        self.timer_notification_enabled()
+        return changed
+
+    @pyqtSlot(result=bool)
     def reset_image_order_and_pick_random(self):
         global imgList
         if not imgList.resetImageOrderAndPickRandom():
@@ -2187,6 +2342,7 @@ backend.stay_on_top()
 backend.ui_language()
 backend.emit_mode_state(reload_image=False)
 backend.emit_global_flip_state()
+QTimer.singleShot(0, backend.prepare_timer_notifications)
 
 if imgList.getAppMode() in ('photo_switching', 'color_photo') and imgList.hasImages():
     backend.initialize_current_image()
