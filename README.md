@@ -378,6 +378,7 @@ Behavior:
 - installs or upgrades `pyinstaller`
 - checks for `PyQt6`
 - installs `PyQt6` automatically if it is not found
+- signs the exe when a code-signing certificate is configured
 - builds `dist\JustDraw.exe`
 
 ### Command-line Build
@@ -413,6 +414,17 @@ Behavior:
 - tag builds also attach both files to the GitHub Release automatically
 - tags containing `-` are published as GitHub prereleases automatically
 - tag builds write `version.py` from the tag name so in-app update checks can compare versions
+- tag builds require Authenticode signing credentials so Windows shows a verified publisher instead of `Unknown publisher`
+
+### Windows Code Signing
+
+Windows SmartScreen shows `Unknown publisher` for unsigned executables. Release builds sign `dist\JustDraw.exe` before publishing. Configure GitHub with a trusted Authenticode code-signing certificate:
+
+- Secret `JUSTDRAW_CODESIGN_CERT_BASE64`: base64-encoded `.pfx` certificate
+- Secret `JUSTDRAW_CODESIGN_CERT_PASSWORD`: certificate password
+- Optional variable `JUSTDRAW_CODESIGN_TIMESTAMP_URL`: timestamp server URL, defaults to `http://timestamp.digicert.com`
+
+Local `build_windows_exe.bat` uses the same signing script. Set `JUSTDRAW_CODESIGN_CERT_PATH` and `JUSTDRAW_CODESIGN_CERT_PASSWORD` before building, or set `JUSTDRAW_CODESIGN_CERT_BASE64` instead of a path. Without a certificate, local builds skip signing; tag release builds fail rather than publishing an unsigned exe.
 
 ## Project Layout
 
@@ -424,6 +436,7 @@ Behavior:
 - `video_tools.py` - `ffmpeg` / `ffprobe` helpers and protected-video export pipeline
 - `build_exe.py` - PyInstaller one-file build entry point
 - `build_windows_exe.bat` - Windows helper script for local EXE packaging
+- `scripts/sign_windows_exe.ps1` - optional Authenticode signing helper for Windows builds
 - `.github/workflows/build-windows-exe.yml` - GitHub Actions workflow for Windows build artifacts and tagged releases
 
 ## License

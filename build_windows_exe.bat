@@ -40,5 +40,14 @@ if errorlevel 1 (
 )
 
 echo.
+echo Signing JustDraw.exe if a certificate is configured ...
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sign_windows_exe.ps1 -ExePath dist\JustDraw.exe
+if errorlevel 1 (
+  echo Signing failed.
+  pause
+  exit /b 1
+)
+
+echo.
 echo Build succeeded: dist\JustDraw.exe
 pause

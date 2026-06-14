@@ -37,6 +37,15 @@ jobs:
       - name: Build JustDraw.exe
         run: python build_exe.py
 
+      - name: Sign JustDraw.exe
+        shell: pwsh
+        env:
+          JUSTDRAW_REQUIRE_CODESIGN: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+          JUSTDRAW_CODESIGN_CERT_BASE64: ${{ secrets.JUSTDRAW_CODESIGN_CERT_BASE64 }}
+          JUSTDRAW_CODESIGN_CERT_PASSWORD: ${{ secrets.JUSTDRAW_CODESIGN_CERT_PASSWORD }}
+          JUSTDRAW_CODESIGN_TIMESTAMP_URL: ${{ vars.JUSTDRAW_CODESIGN_TIMESTAMP_URL }}
+        run: .\scripts\sign_windows_exe.ps1 -ExePath dist\JustDraw.exe
+
       - name: Write SHA256 checksum
         shell: pwsh
         run: |
