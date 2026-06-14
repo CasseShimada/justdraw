@@ -20,6 +20,7 @@ default_timer_seconds = 90
 default_stay_on_top = True
 default_ui_language = 'en'
 default_update_proxy_url = ''
+default_lock_image_viewport_aspect_ratio = False
 ui_languages = ('en', 'zh')
 app_mode_photo_switching = 'photo_switching'
 app_mode_color_blocks = 'color_blocks'
@@ -120,6 +121,7 @@ class ImageList:
         self.stay_on_top = default_stay_on_top
         self.ui_language = detect_system_ui_language()
         self.update_proxy_url = default_update_proxy_url
+        self.lock_image_viewport_aspect_ratio = default_lock_image_viewport_aspect_ratio
         self.timer_end_mode = default_timer_end_mode
         self.timer_notification_enabled = default_timer_notification_enabled
         self.prestart_countdown_enabled = False
@@ -436,6 +438,10 @@ class ImageList:
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
         self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
         self.update_proxy_url = str(data.get('update_proxy_url', default_update_proxy_url)).strip()
+        self.lock_image_viewport_aspect_ratio = self._to_bool(
+            data.get('lock_image_viewport_aspect_ratio', default_lock_image_viewport_aspect_ratio),
+            default_lock_image_viewport_aspect_ratio
+        )
         self.timer_notification_enabled = self._to_bool(
             data.get('timer_notification_enabled', default_timer_notification_enabled),
             default_timer_notification_enabled
@@ -562,6 +568,7 @@ class ImageList:
             'stay_on_top': self.stay_on_top,
             'ui_language': self.ui_language,
             'update_proxy_url': self.update_proxy_url,
+            'lock_image_viewport_aspect_ratio': self.lock_image_viewport_aspect_ratio,
             'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
             'timer_notification_enabled': self.isTimerNotificationEnabled(),
             'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
@@ -1622,6 +1629,24 @@ class ImageList:
         self.update_proxy_url = normalized
         self.saveConfig()
         return True
+
+    def isLockImageViewportAspectRatioEnabled(self):
+        return self._to_bool(
+            self.lock_image_viewport_aspect_ratio,
+            default_lock_image_viewport_aspect_ratio
+        )
+
+    def setLockImageViewportAspectRatioEnabled(self, enabled):
+        new_value = self._to_bool(enabled, default_lock_image_viewport_aspect_ratio)
+        if self.lock_image_viewport_aspect_ratio == new_value:
+            return False
+        self.lock_image_viewport_aspect_ratio = new_value
+        self.saveConfig()
+        return True
+
+    def toggleLockImageViewportAspectRatioEnabled(self):
+        self.setLockImageViewportAspectRatioEnabled(not self.isLockImageViewportAspectRatioEnabled())
+        return self.isLockImageViewportAspectRatioEnabled()
 
     def setTimerSeconds(self, seconds):
         if seconds <= 0:

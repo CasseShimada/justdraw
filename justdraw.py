@@ -777,6 +777,7 @@ class Backend(QObject):
     setphotoswitchingmosaicenabled = pyqtSignal(bool, arguments=['enabled'])
     setcolorphotomosaicenabled = pyqtSignal(bool, arguments=['enabled'])
     setmosaicdownsamplefactor = pyqtSignal(int, arguments=['factor'])
+    setlockimageviewportaspectratio = pyqtSignal(bool, arguments=['enabled'])
 
     # set ffmpeg-based export availability/busy state
     setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
@@ -1138,6 +1139,10 @@ $notifier.Show($toast)
         global imgList
         self.setmosaicdownsamplefactor.emit(imgList.getMosaicDownsampleFactor())
 
+    def lock_image_viewport_aspect_ratio(self):
+        global imgList
+        self.setlockimageviewportaspectratio.emit(imgList.isLockImageViewportAspectRatioEnabled())
+
     def protected_video_export_available(self):
         self.setprotectedvideoexportavailable.emit(bool(self.video_tools.get('available')))
 
@@ -1166,6 +1171,7 @@ $notifier.Show($toast)
         self.photo_switching_mosaic_enabled()
         self.color_photo_mosaic_enabled()
         self.mosaic_downsample_factor()
+        self.lock_image_viewport_aspect_ratio()
         self.protected_video_export_available()
         self.protected_video_export_busy_state()
         self.update_proxy_url()
@@ -2264,6 +2270,13 @@ $notifier.Show($toast)
         changed = imgList.setMosaicDownsampleFactor(factor)
         self.mosaic_downsample_factor()
         return changed
+
+    @pyqtSlot(result=bool)
+    def toggle_lock_image_viewport_aspect_ratio(self):
+        global imgList
+        enabled = imgList.toggleLockImageViewportAspectRatioEnabled()
+        self.lock_image_viewport_aspect_ratio()
+        return enabled
 
     @pyqtSlot(result=bool)
     def export_protected_short_video(self):

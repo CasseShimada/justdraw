@@ -207,6 +207,7 @@ Visible in `Color Blocks`.
   - `Chinese`
 - `Check For Updates`
 - `Update Proxy...`
+- `Lock Image Viewport Aspect Ratio`
 
 The first launch uses the system language: Chinese systems start in Chinese, and other systems start in English. After the user changes the language in `Settings -> Language`, the choice is saved.
 
@@ -351,6 +352,7 @@ When running as a packaged app:
 - stay-on-top flag
 - UI language
 - update proxy URL
+- image viewport aspect-ratio lock
 - global flip state
 - protected video export dialog state
 

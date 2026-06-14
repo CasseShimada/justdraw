@@ -20,6 +20,7 @@ ApplicationWindow {
         "settings.checkUpdates": {"en": "Check For Updates", "zh": "检查更新"},
         "settings.checkUpdatesBusy": {"en": "Checking For Updates...", "zh": "正在检查更新..."},
         "settings.updateProxy": {"en": "Update Proxy...", "zh": "更新代理..."},
+        "settings.lockImageViewportAspectRatio": {"en": "Lock Image Viewport Aspect Ratio", "zh": "锁定图片视口比例"},
         "language.english": {"en": "English", "zh": "英语"},
         "language.chinese": {"en": "Chinese", "zh": "中文"},
         "file.setImageFolder": {"en": "Set Image Folder...", "zh": "设置图片文件夹..."},
@@ -122,7 +123,9 @@ ApplicationWindow {
         "toast.rotatedLeft": {"en": "Rotated left", "zh": "已向左旋转"},
         "toast.rotatedRight": {"en": "Rotated right", "zh": "已向右旋转"},
         "toast.mosaicEnabled": {"en": "Mosaic enabled", "zh": "马赛克已开启"},
-        "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"}
+        "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"},
+        "toast.lockImageViewportEnabled": {"en": "Image viewport aspect ratio locked", "zh": "图片视口比例已锁定"},
+        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"}
     })
 
     QtObject {
@@ -375,6 +378,7 @@ ApplicationWindow {
     property bool protectedVideoExportBusy: false
     property string updateProxyUrl: ""
     property bool updateBusy: false
+    property bool lockImageViewportAspectRatio: false
 
     property var recentImagePaths: []
     property bool applyingBackendWindowSize: false
@@ -981,6 +985,33 @@ ApplicationWindow {
         return null;
     }
 
+    function imageViewportAspectRatio(sourceMeta, fallbackImage) {
+        var sourceWidth = sourceMeta && sourceMeta.sourceSize.width > 0
+            ? sourceMeta.sourceSize.width
+            : (fallbackImage && fallbackImage.sourceSize.width > 0 ? fallbackImage.sourceSize.width : 0);
+        var sourceHeight = sourceMeta && sourceMeta.sourceSize.height > 0
+            ? sourceMeta.sourceSize.height
+            : (fallbackImage && fallbackImage.sourceSize.height > 0 ? fallbackImage.sourceSize.height : 0);
+        if (sourceWidth <= 0 || sourceHeight <= 0) {
+            return 0;
+        }
+        return sourceWidth / sourceHeight;
+    }
+
+    function lockedViewportWidth(containerWidth, containerHeight, imageRatio) {
+        if (!lockImageViewportAspectRatio || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
+            return containerWidth;
+        }
+        return Math.round(Math.min(containerWidth, containerHeight * imageRatio));
+    }
+
+    function lockedViewportHeight(containerWidth, containerHeight, imageRatio) {
+        if (!lockImageViewportAspectRatio || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
+            return containerHeight;
+        }
+        return Math.round(Math.min(containerHeight, containerWidth / imageRatio));
+    }
+
     function saveViewStateForViewport(viewport, imagePath) {
         if (!backend || !viewport || !imagePath) {
             return;
@@ -1056,7 +1087,7 @@ ApplicationWindow {
     function styleGeneratedSubMenuItems() {
         styleGeneratedSubMenuItem(fileMenu.itemAt(1));
         styleGeneratedSubMenuItem(timerMenu.itemAt(6));
-        styleGeneratedSubMenuItem(settingsMenu.itemAt(3));
+        styleGeneratedSubMenuItem(settingsMenu.itemAt(4));
     }
 
     function syncTopMenus() {
@@ -1308,6 +1339,16 @@ ApplicationWindow {
 
         closeTopMenus();
         backend.open_update_proxy_settings();
+    }
+
+    function toggleLockImageViewportAspectRatioAction() {
+        if (!backend) {
+            return;
+        }
+
+        var willEnable = !lockImageViewportAspectRatio;
+        backend.toggle_lock_image_viewport_aspect_ratio();
+        showActionToast(willEnable ? t("toast.lockImageViewportEnabled") : t("toast.lockImageViewportDisabled"));
     }
 
     function copyImageAction() {
@@ -1974,7 +2015,7 @@ ApplicationWindow {
             id: settingsMenu
             title: t("menu.settings")
             popupType: Popup.Item
-            implicitWidth: 220
+            implicitWidth: 260
             width: implicitWidth
             delegate: compactMenuItemDelegate
             padding: 0
@@ -2004,6 +2045,11 @@ ApplicationWindow {
             CompactMenuItem {
                 text: t("settings.updateProxy")
                 onTriggered: openUpdateProxySettingsAction()
+            }
+
+            CompactMenuItem {
+                text: (lockImageViewportAspectRatio ? "✓ " : "") + t("settings.lockImageViewportAspectRatio")
+                onTriggered: toggleLockImageViewportAspectRatioAction()
             }
 
             MenuSeparator {}
@@ -2413,6 +2459,12 @@ ApplicationWindow {
             );
         }
 
+        function onSetlockimageviewportaspectratio(enabled) {
+            lockImageViewportAspectRatio = enabled;
+            photoSwitchingViewport.applyImageGeometry();
+            colorPhotoViewport.applyImageGeometry();
+        }
+
         function onSetprotectedvideoexportavailable(enabled) {
             protectedVideoExportAvailable = enabled;
         }
@@ -2548,7 +2600,10 @@ ApplicationWindow {
 
             Item {
                 id: photoSwitchingViewport
-                anchors.fill: parent
+                anchors.centerIn: parent
+                readonly property real viewportAspectRatio: imageViewportAspectRatio(photoSwitchingSourceMeta, photoSwitchingImage)
+                width: lockedViewportWidth(photoSwitchingPage.width, photoSwitchingPage.height, viewportAspectRatio)
+                height: lockedViewportHeight(photoSwitchingPage.width, photoSwitchingPage.height, viewportAspectRatio)
                 clip: true
 
                 property real imageScale: 1.0
@@ -2664,6 +2719,7 @@ ApplicationWindow {
                     source: photoSwitchingImagePath
                     asynchronous: true
                     autoTransform: true
+                    onStatusChanged: photoSwitchingViewport.applyImageGeometry()
                 }
 
                 Image {
@@ -2895,7 +2951,10 @@ ApplicationWindow {
 
             Item {
                 id: colorPhotoViewport
-                anchors.fill: parent
+                anchors.centerIn: parent
+                readonly property real viewportAspectRatio: imageViewportAspectRatio(colorPhotoSourceMeta, colorPhotoImage)
+                width: lockedViewportWidth(colorPhotoPage.width, colorPhotoPage.height, viewportAspectRatio)
+                height: lockedViewportHeight(colorPhotoPage.width, colorPhotoPage.height, viewportAspectRatio)
                 clip: true
 
                 property real imageScale: 1.0
@@ -3011,6 +3070,7 @@ ApplicationWindow {
                     source: colorPhotoImagePath
                     asynchronous: true
                     autoTransform: true
+                    onStatusChanged: colorPhotoViewport.applyImageGeometry()
                 }
 
                 Image {
