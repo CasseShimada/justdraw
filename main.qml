@@ -214,7 +214,7 @@ ApplicationWindow {
         property int textElideMode: Text.ElideRight
         readonly property bool hasSubMenu: !!control.subMenu
         implicitWidth: control.contentItem.implicitWidth + control.leftPadding + control.rightPadding
-        implicitHeight: uiMetrics.menuItemHeight
+        implicitHeight: visible ? uiMetrics.menuItemHeight : 0
         height: implicitHeight
         padding: 0
         topPadding: uiMetrics.menuItemVerticalPadding
