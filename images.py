@@ -19,6 +19,7 @@ default_window_height = 1120
 default_timer_seconds = 90
 default_stay_on_top = True
 default_ui_language = 'en'
+default_update_proxy_url = ''
 ui_languages = ('en', 'zh')
 app_mode_photo_switching = 'photo_switching'
 app_mode_color_blocks = 'color_blocks'
@@ -118,6 +119,7 @@ class ImageList:
         self.random_play_mode = False
         self.stay_on_top = default_stay_on_top
         self.ui_language = detect_system_ui_language()
+        self.update_proxy_url = default_update_proxy_url
         self.timer_end_mode = default_timer_end_mode
         self.timer_notification_enabled = default_timer_notification_enabled
         self.prestart_countdown_enabled = False
@@ -433,6 +435,7 @@ class ImageList:
         self.cur_timer = 0
         self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
         self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
+        self.update_proxy_url = str(data.get('update_proxy_url', default_update_proxy_url)).strip()
         self.timer_notification_enabled = self._to_bool(
             data.get('timer_notification_enabled', default_timer_notification_enabled),
             default_timer_notification_enabled
@@ -558,6 +561,7 @@ class ImageList:
             'random_play_mode': self._to_bool(photo_mode.get('random_play_mode', False), False),
             'stay_on_top': self.stay_on_top,
             'ui_language': self.ui_language,
+            'update_proxy_url': self.update_proxy_url,
             'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
             'timer_notification_enabled': self.isTimerNotificationEnabled(),
             'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
@@ -1605,6 +1609,17 @@ class ImageList:
         if self.ui_language == normalized:
             return False
         self.ui_language = normalized
+        self.saveConfig()
+        return True
+
+    def getUpdateProxyUrl(self):
+        return str(self.update_proxy_url or '').strip()
+
+    def setUpdateProxyUrl(self, proxy_url):
+        normalized = str(proxy_url or '').strip()
+        if self.update_proxy_url == normalized:
+            return False
+        self.update_proxy_url = normalized
         self.saveConfig()
         return True
 

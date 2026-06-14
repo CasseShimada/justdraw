@@ -17,6 +17,9 @@ ApplicationWindow {
         "menu.mosaic": {"en": "Mosaic", "zh": "马赛克"},
         "menu.settings": {"en": "Settings", "zh": "设置"},
         "menu.language": {"en": "Language", "zh": "语言"},
+        "settings.checkUpdates": {"en": "Check For Updates", "zh": "检查更新"},
+        "settings.checkUpdatesBusy": {"en": "Checking For Updates...", "zh": "正在检查更新..."},
+        "settings.updateProxy": {"en": "Update Proxy...", "zh": "更新代理..."},
         "language.english": {"en": "English", "zh": "英语"},
         "language.chinese": {"en": "Chinese", "zh": "中文"},
         "file.setImageFolder": {"en": "Set Image Folder...", "zh": "设置图片文件夹..."},
@@ -366,6 +369,8 @@ ApplicationWindow {
     property int maxMosaicDownsampleFactor: 64
     property bool protectedVideoExportAvailable: false
     property bool protectedVideoExportBusy: false
+    property string updateProxyUrl: ""
+    property bool updateBusy: false
 
     property var recentImagePaths: []
     property bool applyingBackendWindowSize: false
@@ -1283,6 +1288,24 @@ ApplicationWindow {
         timerEditPopup.open();
     }
 
+    function checkForUpdatesAction() {
+        if (!backend || updateBusy) {
+            return;
+        }
+
+        closeTopMenus();
+        backend.check_for_updates();
+    }
+
+    function openUpdateProxySettingsAction() {
+        if (!backend) {
+            return;
+        }
+
+        closeTopMenus();
+        backend.open_update_proxy_settings();
+    }
+
     function copyImageAction() {
         if (!backend || !(isPhotoSwitchingMode() || isColorPhotoMode())) {
             return;
@@ -1947,7 +1970,7 @@ ApplicationWindow {
             id: settingsMenu
             title: t("menu.settings")
             popupType: Popup.Item
-            implicitWidth: 180
+            implicitWidth: 220
             width: implicitWidth
             delegate: compactMenuItemDelegate
             padding: 0
@@ -1967,6 +1990,19 @@ ApplicationWindow {
                 border.width: 1
                 radius: 6
             }
+
+            CompactMenuItem {
+                enabled: !updateBusy
+                text: updateBusy ? t("settings.checkUpdatesBusy") : t("settings.checkUpdates")
+                onTriggered: checkForUpdatesAction()
+            }
+
+            CompactMenuItem {
+                text: t("settings.updateProxy")
+                onTriggered: openUpdateProxySettingsAction()
+            }
+
+            MenuSeparator {}
 
             Menu {
                 id: languageMenu
@@ -2379,6 +2415,14 @@ ApplicationWindow {
 
         function onSetprotectedvideoexportbusy(enabled) {
             protectedVideoExportBusy = enabled;
+        }
+
+        function onSetupdateproxyurl(proxy_url) {
+            updateProxyUrl = proxy_url;
+        }
+
+        function onSetupdatebusy(enabled) {
+            updateBusy = enabled;
         }
 
         function onShowtoast(message) {

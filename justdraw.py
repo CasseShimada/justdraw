@@ -11,54 +11,32 @@ import base64
 # Avoid Windows style plugin dependency issues in some PyQt6 installations.
 os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Basic')
 
-try:
-    from PyQt6.QtQml import QQmlApplicationEngine
-    from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt6.QtCore import QThread, QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
-    from PyQt6.QtWidgets import (
-        QAbstractItemView,
-        QApplication,
-        QCheckBox,
-        QComboBox,
-        QDialog,
-        QFileDialog,
-        QHBoxLayout,
-        QInputDialog,
-        QLabel,
-        QLineEdit,
-        QListWidget,
-        QPushButton,
-        QProgressBar,
-        QSpinBox,
-        QSystemTrayIcon,
-        QVBoxLayout,
-        QWidget,
-    )
-except ImportError:
-    from PyQt5.QtQml import QQmlApplicationEngine
-    from PyQt5.QtGui import QColor, QImage, QIcon, QPainter
-    from PyQt5.QtCore import QThread, QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
-    from PyQt5.QtWidgets import (
-        QAbstractItemView,
-        QApplication,
-        QCheckBox,
-        QComboBox,
-        QDialog,
-        QFileDialog,
-        QHBoxLayout,
-        QInputDialog,
-        QLabel,
-        QLineEdit,
-        QListWidget,
-        QPushButton,
-        QProgressBar,
-        QSpinBox,
-        QSystemTrayIcon,
-        QVBoxLayout,
-        QWidget,
-    )
+from PyQt6.QtQml import QQmlApplicationEngine
+from PyQt6.QtGui import QColor, QImage, QIcon, QPainter
+from PyQt6.QtCore import QThread, QTimer, QObject, QUrl, Qt, QtMsgType, pyqtSignal, pyqtSlot, qInstallMessageHandler
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QSpinBox,
+    QSystemTrayIcon,
+    QVBoxLayout,
+    QWidget,
+)
 
 from images import ImageList
+import updater
 import video_tools
 
 print(os.getcwd())
@@ -153,33 +131,27 @@ if hasattr(engine, 'warnings'):
 
 
 def _qt_window_flag():
-    return Qt.WindowType.Window if hasattr(Qt, 'WindowType') else Qt.Window
+    return Qt.WindowType.Window
 
 
 def _qt_window_stays_on_top_hint():
-    return Qt.WindowType.WindowStaysOnTopHint if hasattr(Qt, 'WindowType') else Qt.WindowStaysOnTopHint
+    return Qt.WindowType.WindowStaysOnTopHint
 
 
 def _qt_non_modal():
-    return Qt.WindowModality.NonModal if hasattr(Qt, 'WindowModality') else Qt.NonModal
+    return Qt.WindowModality.NonModal
 
 
 def _qt_extended_selection():
-    if hasattr(QAbstractItemView, 'SelectionMode'):
-        return QAbstractItemView.SelectionMode.ExtendedSelection
-    return QAbstractItemView.ExtendedSelection
+    return QAbstractItemView.SelectionMode.ExtendedSelection
 
 
 def _qt_internal_move():
-    if hasattr(QAbstractItemView, 'DragDropMode'):
-        return QAbstractItemView.DragDropMode.InternalMove
-    return QAbstractItemView.InternalMove
+    return QAbstractItemView.DragDropMode.InternalMove
 
 
 def _qt_tray_information_icon():
-    if hasattr(QSystemTrayIcon, 'MessageIcon'):
-        return QSystemTrayIcon.MessageIcon.Information
-    return QSystemTrayIcon.Information
+    return QSystemTrayIcon.MessageIcon.Information
 
 
 class ProtectedVideoInputListWidget(QListWidget):
@@ -809,9 +781,13 @@ class Backend(QObject):
     # set ffmpeg-based export availability/busy state
     setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
     setprotectedvideoexportbusy = pyqtSignal(bool, arguments=['enabled'])
+    setupdateproxyurl = pyqtSignal(str, arguments=['proxy_url'])
+    setupdatebusy = pyqtSignal(bool, arguments=['enabled'])
     videoexportbusychanged = pyqtSignal(bool)
     videoexportprogress = pyqtSignal(int, str, str)
     videoexportfinished = pyqtSignal(bool, str, str)
+    updatecheckfinished = pyqtSignal(bool, bool, str, str, str, str, str, bool)
+    updatedownloadfinished = pyqtSignal(bool, str, str)
 
     # surface backend status messages to QML toast
     showtoast = pyqtSignal(str, arguments=['message'])
@@ -833,6 +809,9 @@ class Backend(QObject):
         self.video_export_thread = None
         self.video_export_dialog = None
         self.video_export_progress_dialog = None
+        self.update_busy = False
+        self.update_manual_check = False
+        self.pending_release_info = None
         self.image_source_loading_thread = None
         self.image_source_loading_worker = None
         self.image_source_loading_dialog = None
@@ -842,6 +821,8 @@ class Backend(QObject):
         self.videoexportbusychanged.connect(self._handle_video_export_busy_changed)
         self.videoexportprogress.connect(self._handle_video_export_progress)
         self.videoexportfinished.connect(self._handle_video_export_finished)
+        self.updatecheckfinished.connect(self._handle_update_check_finished)
+        self.updatedownloadfinished.connect(self._handle_update_download_finished)
         logger.info(
             'Video tools detected: ffmpeg=%s ffprobe=%s available=%s reason=%s',
             self.video_tools.get('ffmpeg', ''),
@@ -1163,6 +1144,13 @@ $notifier.Show($toast)
     def protected_video_export_busy_state(self):
         self.setprotectedvideoexportbusy.emit(bool(self.video_export_busy))
 
+    def update_proxy_url(self):
+        global imgList
+        self.setupdateproxyurl.emit(imgList.getUpdateProxyUrl())
+
+    def update_busy_state(self):
+        self.setupdatebusy.emit(bool(self.update_busy))
+
     def ui_language(self):
         global imgList
         self.setuilanguage.emit(imgList.getUiLanguage())
@@ -1180,6 +1168,8 @@ $notifier.Show($toast)
         self.mosaic_downsample_factor()
         self.protected_video_export_available()
         self.protected_video_export_busy_state()
+        self.update_proxy_url()
+        self.update_busy_state()
         self.setplaymode.emit('RND' if imgList.isRandomPlayMode() else 'SEQ')
         self.settimervalue.emit(imgList.getTimerSeconds())
         self.settimerendmode.emit(imgList.getTimerEndMode())
@@ -1375,11 +1365,145 @@ $notifier.Show($toast)
         else:
             progress_dialog.show_error(title, detail)
 
+    @pyqtSlot(bool, bool, str, str, str, str, str, bool)
+    def _handle_update_check_finished(
+        self,
+        success,
+        has_update,
+        version,
+        tag_name,
+        html_url,
+        exe_url,
+        sha256_url,
+        manual_check,
+    ):
+        self.update_busy = False
+        self.update_busy_state()
+
+        if not success:
+            message = version or 'Update check failed'
+            logger.warning('Update check failed: %s', message)
+            if manual_check:
+                self.toast('Update check failed: {0}'.format(message))
+            return
+
+        if not has_update:
+            if manual_check:
+                self.toast('JustDraw is already up to date ({0})'.format(updater.APP_VERSION))
+            return
+
+        self.pending_release_info = updater.ReleaseInfo(
+            tag_name=tag_name,
+            html_url=html_url,
+            exe_url=exe_url,
+            sha256_url=sha256_url,
+        )
+
+        if not updater.is_packaged_windows():
+            self._show_update_release_message(version, html_url)
+            return
+
+        if self._confirm_update_download(version, html_url):
+            self._download_pending_update()
+
+    @pyqtSlot(bool, str, str)
+    def _handle_update_download_finished(self, success, title, detail):
+        self.update_busy = False
+        self.update_busy_state()
+        if not success:
+            logger.warning('Update download failed: %s', detail)
+            self.toast('{0}: {1}'.format(title, detail))
+            return
+
+        self.toast(title)
+        self.quit_application()
+
     def _emit_video_export_progress(self, percent, stage, detail):
         self.videoexportprogress.emit(int(max(0, min(100, round(float(percent))))), str(stage), str(detail))
 
     def _emit_video_export_finished(self, success, title, detail):
         self.videoexportfinished.emit(bool(success), str(title), str(detail))
+
+    def _set_update_busy(self, enabled):
+        self.update_busy = bool(enabled)
+        self.update_busy_state()
+
+    def _show_update_release_message(self, version, html_url):
+        def show_dialog():
+            QMessageBox.information(
+                None,
+                'JustDraw Update',
+                'A new JustDraw version is available: {0}\n\n'
+                'Automatic replacement is only available in the packaged Windows app.\n\n'
+                '{1}'.format(version, html_url or updater.GITHUB_RELEASES_URL)
+            )
+
+        self._run_with_window_not_topmost(show_dialog)
+
+    def _confirm_update_download(self, version, html_url):
+        def ask():
+            box = QMessageBox(None)
+            box.setWindowTitle('JustDraw Update')
+            box.setText('A new JustDraw version is available: {0}'.format(version))
+            box.setInformativeText(
+                'Download it with Windows curl.exe, install it, and restart JustDraw?\n\n{0}'.format(
+                    html_url or updater.GITHUB_RELEASES_URL
+                )
+            )
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            return box.exec()
+
+        result = self._run_with_window_not_topmost(ask)
+        return result == QMessageBox.StandardButton.Yes
+
+    def _download_pending_update(self):
+        release_info = self.pending_release_info
+        if release_info is None:
+            return False
+        if self.update_busy:
+            self.toast('Update is already running')
+            return False
+
+        global imgList
+        proxy_url = imgList.getUpdateProxyUrl()
+        self._set_update_busy(True)
+        self.toast('Downloading JustDraw update...')
+        thread = threading.Thread(
+            target=self._run_update_download_worker,
+            args=(release_info, proxy_url),
+            daemon=True
+        )
+        thread.start()
+        return True
+
+    def _run_update_download_worker(self, release_info, proxy_url):
+        try:
+            downloaded_exe = updater.download_release_exe(release_info, proxy_url=proxy_url)
+            script_path = updater.create_update_script(downloaded_exe)
+            updater.launch_update_script(script_path)
+            self.updatedownloadfinished.emit(True, 'Update downloaded. JustDraw will restart.', '')
+        except Exception as exc:
+            logger.exception('Update download/apply failed')
+            self.updatedownloadfinished.emit(False, 'Update failed', str(exc))
+
+    def _run_update_check_worker(self, proxy_url, manual_check):
+        try:
+            release_info = updater.fetch_latest_release(proxy_url=proxy_url)
+            has_update = updater.is_newer_version(release_info.version, updater.APP_VERSION)
+            self.updatecheckfinished.emit(
+                True,
+                has_update,
+                release_info.version,
+                release_info.tag_name,
+                release_info.html_url,
+                release_info.exe_url,
+                release_info.sha256_url,
+                bool(manual_check),
+            )
+        except Exception as exc:
+            logger.exception('Update check failed')
+            self.updatecheckfinished.emit(False, False, str(exc), '', '', '', '', bool(manual_check))
 
     def _resolve_file_dialog_start_path(self, remembered_path='', current_path='', fallback_path=''):
         candidates = [remembered_path, current_path, fallback_path, os.path.expanduser('~')]
@@ -2038,6 +2162,73 @@ $notifier.Show($toast)
         self.ui_language()
         return changed
 
+    @pyqtSlot(result=str)
+    def get_update_proxy_url(self):
+        global imgList
+        return imgList.getUpdateProxyUrl()
+
+    @pyqtSlot(str, result=bool)
+    def set_update_proxy_url(self, proxy_url):
+        global imgList
+        try:
+            normalized = updater.validate_proxy_url(proxy_url)
+        except ValueError as exc:
+            self.toast(str(exc))
+            return False
+
+        changed = imgList.setUpdateProxyUrl(normalized)
+        self.update_proxy_url()
+        return changed
+
+    @pyqtSlot(result=bool)
+    def open_update_proxy_settings(self):
+        global imgList
+
+        def ask_proxy():
+            return QInputDialog.getText(
+                None,
+                'Update Proxy',
+                'Proxy URL for GitHub updates (leave empty for direct connection):',
+                QLineEdit.EchoMode.Normal,
+                imgList.getUpdateProxyUrl(),
+            )
+
+        proxy_url, ok = self._run_with_window_not_topmost(ask_proxy)
+        if not ok:
+            return False
+        if self.set_update_proxy_url(proxy_url):
+            self.toast('Update proxy saved')
+        else:
+            self.toast('Update proxy unchanged')
+        return True
+
+    @pyqtSlot(result=bool)
+    def check_for_updates(self):
+        return self._start_update_check(manual_check=True)
+
+    def maybe_check_for_updates_on_startup(self):
+        if not updater.is_packaged_windows():
+            return False
+        return self._start_update_check(manual_check=False)
+
+    def _start_update_check(self, manual_check=False):
+        global imgList
+        if self.update_busy:
+            if manual_check:
+                self.toast('Update check is already running')
+            return False
+        self._set_update_busy(True)
+        if manual_check:
+            self.toast('Checking GitHub for updates...')
+        proxy_url = imgList.getUpdateProxyUrl()
+        thread = threading.Thread(
+            target=self._run_update_check_worker,
+            args=(proxy_url, bool(manual_check)),
+            daemon=True
+        )
+        thread.start()
+        return True
+
     @pyqtSlot(str, str, str, str, result=bool)
     def set_color_blocks_settings(self, stripe_count, min_luma, max_luma, min_saturation):
         global imgList
@@ -2343,6 +2534,7 @@ backend.ui_language()
 backend.emit_mode_state(reload_image=False)
 backend.emit_global_flip_state()
 QTimer.singleShot(0, backend.prepare_timer_notifications)
+QTimer.singleShot(2000, backend.maybe_check_for_updates_on_startup)
 
 if imgList.getAppMode() in ('photo_switching', 'color_photo') and imgList.hasImages():
     backend.initialize_current_image()

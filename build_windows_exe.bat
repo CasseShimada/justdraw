@@ -19,9 +19,9 @@ if errorlevel 1 (
 )
 
 echo Checking Qt dependency...
-py -3 -c "import importlib.util,sys;sys.exit(0 if (importlib.util.find_spec('PyQt6') or importlib.util.find_spec('PyQt5')) else 1)"
+py -3 -c "import PyQt6"
 if errorlevel 1 (
-  echo PyQt not found, installing PyQt6...
+  echo PyQt6 not found, installing PyQt6...
   py -3 -m pip install --upgrade PyQt6
   if errorlevel 1 (
     echo Failed to install PyQt6.

@@ -16,8 +16,7 @@ JustDraw is a desktop reference viewer for drawing practice. It combines a timed
 ## Requirements
 
 - Python 3.x
-- `PyQt6` preferred: `pip install PyQt6`
-- `PyQt5` fallback: `pip install PyQt5`
+- `PyQt6`: `pip install PyQt6`
 - `ffmpeg` + `ffprobe` only if you want protected video export
 - `Pillow` is optional when running from source; if it is installed, the exporter uses Pillow-generated watermark / noise assets that more closely match `video-generator`
 
@@ -206,8 +205,12 @@ Visible in `Color Blocks`.
 - `Language`
   - `English`
   - `Chinese`
+- `Check For Updates`
+- `Update Proxy...`
 
 The first launch uses the system language: Chinese systems start in Chinese, and other systems start in English. After the user changes the language in `Settings -> Language`, the choice is saved.
+
+When running as a packaged Windows app, JustDraw checks GitHub Releases for a newer version after startup. Manual checks are available from `Settings -> Check For Updates`. Downloads use Windows `curl.exe`, verify `JustDraw.exe.sha256` when the release includes it, then replace the current executable after JustDraw exits and restart the app. `Settings -> Update Proxy...` accepts proxy URLs such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:7890`.
 
 ## Context Menus
 
@@ -347,6 +350,7 @@ When running as a packaged app:
 - window size
 - stay-on-top flag
 - UI language
+- update proxy URL
 - global flip state
 - protected video export dialog state
 
@@ -372,8 +376,8 @@ On Windows, run:
 Behavior:
 - checks for the `py` launcher
 - installs or upgrades `pyinstaller`
-- checks for `PyQt6` / `PyQt5`
-- installs `PyQt6` automatically if neither Qt package is found
+- checks for `PyQt6`
+- installs `PyQt6` automatically if it is not found
 - builds `dist\JustDraw.exe`
 
 ### Command-line Build
@@ -387,7 +391,8 @@ py -3 build_exe.py
 `build_exe.py` creates a one-file, windowed PyInstaller build and bundles:
 - `main.qml`
 - `images/`
-- the detected Qt package (`PyQt6` preferred, `PyQt5` fallback)
+- `version.py`
+- `PyQt6`
 - the current Python interpreter environment that launched `build_exe.py`
 
 ### GitHub Actions Build
@@ -407,12 +412,15 @@ Behavior:
   - `dist/JustDraw.exe.sha256`
 - tag builds also attach both files to the GitHub Release automatically
 - tags containing `-` are published as GitHub prereleases automatically
+- tag builds write `version.py` from the tag name so in-app update checks can compare versions
 
 ## Project Layout
 
 - `justdraw.py` - PyQt backend, dialogs, timer control, clipboard helpers, explorer integration, and export orchestration
 - `main.qml` - the main UI, menus, viewports, popups, and toast notifications
 - `images.py` - image-source scanning, ZIP handling, playback persistence, timer state, and mode-scoped config
+- `updater.py` - GitHub release lookup and Windows `curl.exe` update installation
+- `version.py` - packaged app version used by the update checker
 - `video_tools.py` - `ffmpeg` / `ffprobe` helpers and protected-video export pipeline
 - `build_exe.py` - PyInstaller one-file build entry point
 - `build_windows_exe.bat` - Windows helper script for local EXE packaging
