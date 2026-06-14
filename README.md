@@ -54,6 +54,7 @@ Features:
 - per-image zoom / pan / rotation persistence
 - current-image and current-path view-state reset actions
 - global horizontal / vertical flip state shared across image-viewing modes
+- top-bar visibility toggle from the right-click menu
 
 ### Color Blocks
 
@@ -227,10 +228,12 @@ When running as a packaged Windows app, JustDraw checks GitHub Releases for a ne
 - reset current image state
 - flip horizontal / vertical
 - rotate `-90` / `+90`
+- hide / show top bar
 
 ### Color Blocks Context Menu
 
 - copy colors
+- hide / show top bar
 
 ### Color Photo Context Menu
 
@@ -242,6 +245,7 @@ When running as a packaged Windows app, JustDraw checks GitHub Releases for a ne
 - reset current image state
 - flip horizontal / vertical
 - rotate `-90` / `+90`
+- hide / show top bar
 
 ## Clipboard And Explorer Integration
 
@@ -350,6 +354,7 @@ When running as a packaged app:
 - global mosaic size
 - window size
 - stay-on-top flag
+- top-bar visibility
 - UI language
 - update proxy URL
 - image viewport aspect-ratio lock

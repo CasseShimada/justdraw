@@ -778,6 +778,7 @@ class Backend(QObject):
     setcolorphotomosaicenabled = pyqtSignal(bool, arguments=['enabled'])
     setmosaicdownsamplefactor = pyqtSignal(int, arguments=['factor'])
     setlockimageviewportaspectratio = pyqtSignal(bool, arguments=['enabled'])
+    settopchromevisible = pyqtSignal(bool, arguments=['enabled'])
 
     # set ffmpeg-based export availability/busy state
     setprotectedvideoexportavailable = pyqtSignal(bool, arguments=['enabled'])
@@ -1143,6 +1144,10 @@ $notifier.Show($toast)
         global imgList
         self.setlockimageviewportaspectratio.emit(imgList.isLockImageViewportAspectRatioEnabled())
 
+    def top_chrome_visible(self):
+        global imgList
+        self.settopchromevisible.emit(imgList.isTopChromeVisible())
+
     def protected_video_export_available(self):
         self.setprotectedvideoexportavailable.emit(bool(self.video_tools.get('available')))
 
@@ -1172,6 +1177,7 @@ $notifier.Show($toast)
         self.color_photo_mosaic_enabled()
         self.mosaic_downsample_factor()
         self.lock_image_viewport_aspect_ratio()
+        self.top_chrome_visible()
         self.protected_video_export_available()
         self.protected_video_export_busy_state()
         self.update_proxy_url()
@@ -2276,6 +2282,13 @@ $notifier.Show($toast)
         global imgList
         enabled = imgList.toggleLockImageViewportAspectRatioEnabled()
         self.lock_image_viewport_aspect_ratio()
+        return enabled
+
+    @pyqtSlot(result=bool)
+    def toggle_top_chrome_visible(self):
+        global imgList
+        enabled = imgList.toggleTopChromeVisible()
+        self.top_chrome_visible()
         return enabled
 
     @pyqtSlot(result=bool)

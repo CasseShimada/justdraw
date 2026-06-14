@@ -67,6 +67,8 @@ ApplicationWindow {
         "context.flipVertical": {"en": "Flip Vertical", "zh": "垂直翻转"},
         "context.rotateLeft": {"en": "Rotate -90", "zh": "旋转 -90"},
         "context.rotateRight": {"en": "Rotate +90", "zh": "旋转 +90"},
+        "context.hideTopChrome": {"en": "Hide Top Bar", "zh": "隐藏顶部栏"},
+        "context.showTopChrome": {"en": "Show Top Bar", "zh": "显示顶部栏"},
         "mosaic.enable": {"en": "Enable Mosaic", "zh": "启用马赛克"},
         "mosaic.size": {"en": "Mosaic Size", "zh": "马赛克大小"},
         "label.colors": {"en": "Colors", "zh": "颜色"},
@@ -125,7 +127,9 @@ ApplicationWindow {
         "toast.mosaicEnabled": {"en": "Mosaic enabled", "zh": "马赛克已开启"},
         "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"},
         "toast.lockImageViewportEnabled": {"en": "Image viewport aspect ratio locked", "zh": "图片视口比例已锁定"},
-        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"}
+        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"},
+        "toast.topChromeHidden": {"en": "Top bar hidden", "zh": "顶部栏已隐藏"},
+        "toast.topChromeShown": {"en": "Top bar shown", "zh": "顶部栏已显示"}
     })
 
     QtObject {
@@ -358,6 +362,7 @@ ApplicationWindow {
     property bool canRevealInExplorer: false
     property bool flipHorizontalEnabled: false
     property bool flipVerticalEnabled: false
+    property bool showTopChrome: true
 
     property int colorBlocksMinStripes: 1
     property int colorBlocksMaxStripes: 20
@@ -406,9 +411,13 @@ ApplicationWindow {
     width: window_width
     height: window_height
     title: "Just Draw!"
-    flags: stayOnTop
-        ? (Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
-        : (Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+    flags: showTopChrome
+        ? (stayOnTop
+            ? (Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
+            : (Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint))
+        : (stayOnTop
+            ? (Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            : (Qt.Window | Qt.FramelessWindowHint))
 
     function isPhotoSwitchingMode() {
         return appMode === "photo_switching";
@@ -1351,6 +1360,16 @@ ApplicationWindow {
         showActionToast(willEnable ? t("toast.lockImageViewportEnabled") : t("toast.lockImageViewportDisabled"));
     }
 
+    function toggleTopChromeVisibleAction() {
+        if (!backend) {
+            return;
+        }
+
+        var willShow = !showTopChrome;
+        backend.toggle_top_chrome_visible();
+        showActionToast(willShow ? t("toast.topChromeShown") : t("toast.topChromeHidden"));
+    }
+
     function copyImageAction() {
         if (!backend || !(isPhotoSwitchingMode() || isColorPhotoMode())) {
             return;
@@ -1544,7 +1563,8 @@ ApplicationWindow {
 
     menuBar: MenuBar {
         id: appMenuBar
-        implicitHeight: uiMetrics.menuBarHeight
+        visible: showTopChrome
+        implicitHeight: showTopChrome ? uiMetrics.menuBarHeight : 0
         height: implicitHeight
         topPadding: uiMetrics.menuBarVerticalPadding
         bottomPadding: uiMetrics.menuBarVerticalPadding
@@ -2185,6 +2205,13 @@ ApplicationWindow {
             onTriggered: rotateRightAction()
         }
 
+        MenuSeparator {}
+
+        CompactMenuItem {
+            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
+            onTriggered: toggleTopChromeVisibleAction()
+        }
+
     }
 
     Menu {
@@ -2219,6 +2246,13 @@ ApplicationWindow {
         CompactMenuItem {
             text: t("color.copyColors")
             onTriggered: copyColorBlocksAction()
+        }
+
+        MenuSeparator {}
+
+        CompactMenuItem {
+            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
+            onTriggered: toggleTopChromeVisibleAction()
         }
     }
 
@@ -2305,6 +2339,13 @@ ApplicationWindow {
             onTriggered: rotateRightAction()
         }
 
+        MenuSeparator {}
+
+        CompactMenuItem {
+            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
+            onTriggered: toggleTopChromeVisibleAction()
+        }
+
     }
 
     Connections {
@@ -2354,6 +2395,14 @@ ApplicationWindow {
 
         function onSetstayontop(enabled) {
             stayOnTop = enabled;
+        }
+
+        function onSettopchromevisible(enabled) {
+            showTopChrome = enabled;
+            Qt.callLater(function() {
+                root.show();
+                returnFocusToApp();
+            });
         }
 
         function onSetuilanguage(language) {
