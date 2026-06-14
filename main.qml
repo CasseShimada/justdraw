@@ -249,6 +249,8 @@ ApplicationWindow {
             implicitHeight: uiMetrics.menuItemHeight
             width: implicitWidth
             height: implicitHeight
+            x: control.width - width
+            y: Math.round((control.height - height) / 2)
 
             Text {
                 anchors.right: parent.right
@@ -303,6 +305,8 @@ ApplicationWindow {
             implicitHeight: uiMetrics.menuItemHeight
             width: implicitWidth
             height: implicitHeight
+            x: control ? control.width - width : 0
+            y: control ? Math.round((control.height - height) / 2) : 0
 
             Text {
                 anchors.right: parent.right
@@ -1052,7 +1056,7 @@ ApplicationWindow {
     function styleGeneratedSubMenuItems() {
         styleGeneratedSubMenuItem(fileMenu.itemAt(1));
         styleGeneratedSubMenuItem(timerMenu.itemAt(6));
-        styleGeneratedSubMenuItem(settingsMenu.itemAt(0));
+        styleGeneratedSubMenuItem(settingsMenu.itemAt(3));
     }
 
     function syncTopMenus() {
