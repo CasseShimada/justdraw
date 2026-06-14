@@ -17,11 +17,10 @@ zip_extensions = ['.zip']
 default_window_width = 840
 default_window_height = 1120
 default_timer_seconds = 90
-default_stay_on_top = True
+default_stay_on_top = False
 default_ui_language = 'en'
 default_update_proxy_url = ''
 default_lock_image_viewport_aspect_ratio = False
-default_show_top_chrome = True
 ui_languages = ('en', 'zh')
 app_mode_photo_switching = 'photo_switching'
 app_mode_color_blocks = 'color_blocks'
@@ -123,7 +122,6 @@ class ImageList:
         self.ui_language = detect_system_ui_language()
         self.update_proxy_url = default_update_proxy_url
         self.lock_image_viewport_aspect_ratio = default_lock_image_viewport_aspect_ratio
-        self.show_top_chrome = default_show_top_chrome
         self.timer_end_mode = default_timer_end_mode
         self.timer_notification_enabled = default_timer_notification_enabled
         self.prestart_countdown_enabled = False
@@ -437,14 +435,13 @@ class ImageList:
 
         # Keep startup behavior: first timer tick should trigger initial image load.
         self.cur_timer = 0
-        self.stay_on_top = self._to_bool(data.get('stay_on_top', default_stay_on_top), default_stay_on_top)
+        self.stay_on_top = default_stay_on_top
         self.ui_language = self._normalize_ui_language(data.get('ui_language', '')) or detect_system_ui_language()
         self.update_proxy_url = str(data.get('update_proxy_url', default_update_proxy_url)).strip()
         self.lock_image_viewport_aspect_ratio = self._to_bool(
             data.get('lock_image_viewport_aspect_ratio', default_lock_image_viewport_aspect_ratio),
             default_lock_image_viewport_aspect_ratio
         )
-        self.show_top_chrome = self._to_bool(data.get('show_top_chrome', default_show_top_chrome), default_show_top_chrome)
         self.timer_notification_enabled = self._to_bool(
             data.get('timer_notification_enabled', default_timer_notification_enabled),
             default_timer_notification_enabled
@@ -568,11 +565,9 @@ class ImageList:
             'window_height': self.window_height,
             'timer_seconds': int(photo_mode.get('timer_seconds', default_timer_seconds)),
             'random_play_mode': self._to_bool(photo_mode.get('random_play_mode', False), False),
-            'stay_on_top': self.stay_on_top,
             'ui_language': self.ui_language,
             'update_proxy_url': self.update_proxy_url,
             'lock_image_viewport_aspect_ratio': self.lock_image_viewport_aspect_ratio,
-            'show_top_chrome': self.show_top_chrome,
             'timer_end_mode': str(photo_mode.get('timer_end_mode', default_timer_end_mode)),
             'timer_notification_enabled': self.isTimerNotificationEnabled(),
             'prestart_countdown_enabled': self._to_bool(photo_mode.get('prestart_countdown_enabled', False), False),
@@ -1651,21 +1646,6 @@ class ImageList:
     def toggleLockImageViewportAspectRatioEnabled(self):
         self.setLockImageViewportAspectRatioEnabled(not self.isLockImageViewportAspectRatioEnabled())
         return self.isLockImageViewportAspectRatioEnabled()
-
-    def isTopChromeVisible(self):
-        return self._to_bool(self.show_top_chrome, default_show_top_chrome)
-
-    def setTopChromeVisible(self, enabled):
-        new_value = self._to_bool(enabled, default_show_top_chrome)
-        if self.show_top_chrome == new_value:
-            return False
-        self.show_top_chrome = new_value
-        self.saveConfig()
-        return True
-
-    def toggleTopChromeVisible(self):
-        self.setTopChromeVisible(not self.isTopChromeVisible())
-        return self.isTopChromeVisible()
 
     def setTimerSeconds(self, seconds):
         if seconds <= 0:

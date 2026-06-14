@@ -34,7 +34,7 @@ Startup notes:
 - `Photo Switching` starts paused
 - default window size is `840 x 1120`
 - default timer value is `90` seconds
-- `Stay On Top` defaults to enabled until you toggle it off
+- `Stay On Top` starts disabled on each launch
 
 ## Modes
 
@@ -169,7 +169,6 @@ Visible in `Photo Switching` and `Color Photo`.
 ### Window
 
 - `Protected Video Export...`
-- `Stay On Top`
 
 ### Mode
 
@@ -228,12 +227,12 @@ When running as a packaged Windows app, JustDraw checks GitHub Releases for a ne
 - reset current image state
 - flip horizontal / vertical
 - rotate `-90` / `+90`
-- hide / show top bar
+- stay on top
 
 ### Color Blocks Context Menu
 
 - copy colors
-- hide / show top bar
+- stay on top
 
 ### Color Photo Context Menu
 
@@ -245,7 +244,7 @@ When running as a packaged Windows app, JustDraw checks GitHub Releases for a ne
 - reset current image state
 - flip horizontal / vertical
 - rotate `-90` / `+90`
-- hide / show top bar
+- stay on top
 
 ## Clipboard And Explorer Integration
 
@@ -259,7 +258,7 @@ When running as a packaged Windows app, JustDraw checks GitHub Releases for a ne
 
 - actions surface short toast notifications inside the UI
 - the main window size is remembered
-- `Stay On Top` is remembered
+- `Stay On Top` is controlled from the right-click menu, starts disabled on each launch, hides the top bar when enabled, and restores it when disabled
 - auxiliary protected-video-export windows follow the app-wide `Stay On Top` setting
 
 ## Protected Video Export
@@ -353,7 +352,6 @@ When running as a packaged app:
 - color-photo mosaic toggle
 - global mosaic size
 - window size
-- stay-on-top flag
 - top-bar visibility
 - UI language
 - update proxy URL

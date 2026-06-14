@@ -32,7 +32,6 @@ ApplicationWindow {
         "window.export": {"en": "Protected Video Export...", "zh": "受保护视频导出..."},
         "window.exportBusy": {"en": "Protected Video Export... (Busy)", "zh": "受保护视频导出...（忙碌）"},
         "window.exportUnavailable": {"en": "Protected Video Export Unavailable", "zh": "受保护视频导出不可用"},
-        "window.stayOnTop": {"en": "Stay On Top", "zh": "窗口置顶"},
         "mode.photoSwitching": {"en": "Photo Switching", "zh": "图片切换"},
         "mode.colorBlocks": {"en": "Color Blocks", "zh": "色块练习"},
         "mode.colorPhoto": {"en": "Color Photo", "zh": "色彩照片"},
@@ -67,8 +66,7 @@ ApplicationWindow {
         "context.flipVertical": {"en": "Flip Vertical", "zh": "垂直翻转"},
         "context.rotateLeft": {"en": "Rotate -90", "zh": "旋转 -90"},
         "context.rotateRight": {"en": "Rotate +90", "zh": "旋转 +90"},
-        "context.hideTopChrome": {"en": "Hide Top Bar", "zh": "隐藏顶部栏"},
-        "context.showTopChrome": {"en": "Show Top Bar", "zh": "显示顶部栏"},
+        "context.stayOnTop": {"en": "Stay On Top", "zh": "窗口置顶"},
         "mosaic.enable": {"en": "Enable Mosaic", "zh": "启用马赛克"},
         "mosaic.size": {"en": "Mosaic Size", "zh": "马赛克大小"},
         "label.colors": {"en": "Colors", "zh": "颜色"},
@@ -127,9 +125,7 @@ ApplicationWindow {
         "toast.mosaicEnabled": {"en": "Mosaic enabled", "zh": "马赛克已开启"},
         "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"},
         "toast.lockImageViewportEnabled": {"en": "Image viewport aspect ratio locked", "zh": "图片视口比例已锁定"},
-        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"},
-        "toast.topChromeHidden": {"en": "Top bar hidden", "zh": "顶部栏已隐藏"},
-        "toast.topChromeShown": {"en": "Top bar shown", "zh": "顶部栏已显示"}
+        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"}
     })
 
     QtObject {
@@ -1360,16 +1356,6 @@ ApplicationWindow {
         showActionToast(willEnable ? t("toast.lockImageViewportEnabled") : t("toast.lockImageViewportDisabled"));
     }
 
-    function toggleTopChromeVisibleAction() {
-        if (!backend) {
-            return;
-        }
-
-        var willShow = !showTopChrome;
-        backend.toggle_top_chrome_visible();
-        showActionToast(willShow ? t("toast.topChromeShown") : t("toast.topChromeHidden"));
-    }
-
     function copyImageAction() {
         if (!backend || !(isPhotoSwitchingMode() || isColorPhotoMode())) {
             return;
@@ -1721,12 +1707,6 @@ ApplicationWindow {
                 text: t("window.exportUnavailable")
             }
 
-            MenuSeparator {}
-
-            CompactMenuItem {
-                text: (stayOnTop ? "✓ " : "") + t("window.stayOnTop")
-                onTriggered: toggleStayOnTopAction()
-            }
         }
 
         Menu {
@@ -2117,7 +2097,7 @@ ApplicationWindow {
         parent: Overlay.overlay
         popupType: Popup.Item
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        implicitWidth: 220
+        implicitWidth: 240
         width: implicitWidth
         delegate: compactMenuItemDelegate
         padding: 0
@@ -2208,8 +2188,8 @@ ApplicationWindow {
         MenuSeparator {}
 
         CompactMenuItem {
-            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
-            onTriggered: toggleTopChromeVisibleAction()
+            text: (stayOnTop ? "✓ " : "") + t("context.stayOnTop")
+            onTriggered: toggleStayOnTopAction()
         }
 
     }
@@ -2219,7 +2199,7 @@ ApplicationWindow {
         parent: Overlay.overlay
         popupType: Popup.Item
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        implicitWidth: 220
+        implicitWidth: 240
         width: implicitWidth
         delegate: compactMenuItemDelegate
         padding: 0
@@ -2251,9 +2231,10 @@ ApplicationWindow {
         MenuSeparator {}
 
         CompactMenuItem {
-            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
-            onTriggered: toggleTopChromeVisibleAction()
+            text: (stayOnTop ? "✓ " : "") + t("context.stayOnTop")
+            onTriggered: toggleStayOnTopAction()
         }
+
     }
 
     Menu {
@@ -2261,7 +2242,7 @@ ApplicationWindow {
         parent: Overlay.overlay
         popupType: Popup.Item
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        implicitWidth: 220
+        implicitWidth: 240
         width: implicitWidth
         delegate: compactMenuItemDelegate
         padding: 0
@@ -2342,8 +2323,8 @@ ApplicationWindow {
         MenuSeparator {}
 
         CompactMenuItem {
-            text: showTopChrome ? t("context.hideTopChrome") : t("context.showTopChrome")
-            onTriggered: toggleTopChromeVisibleAction()
+            text: (stayOnTop ? "✓ " : "") + t("context.stayOnTop")
+            onTriggered: toggleStayOnTopAction()
         }
 
     }

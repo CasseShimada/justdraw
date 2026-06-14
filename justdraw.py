@@ -1146,7 +1146,7 @@ $notifier.Show($toast)
 
     def top_chrome_visible(self):
         global imgList
-        self.settopchromevisible.emit(imgList.isTopChromeVisible())
+        self.settopchromevisible.emit(not imgList.isStayOnTop())
 
     def protected_video_export_available(self):
         self.setprotectedvideoexportavailable.emit(bool(self.video_tools.get('available')))
@@ -2285,13 +2285,6 @@ $notifier.Show($toast)
         return enabled
 
     @pyqtSlot(result=bool)
-    def toggle_top_chrome_visible(self):
-        global imgList
-        enabled = imgList.toggleTopChromeVisible()
-        self.top_chrome_visible()
-        return enabled
-
-    @pyqtSlot(result=bool)
     def export_protected_short_video(self):
         if not self.video_tools.get('available'):
             reason = self.video_tools.get('missing_reason', '') or 'required tools are unavailable'
@@ -2369,7 +2362,9 @@ $notifier.Show($toast)
     @pyqtSlot()
     def toggle_stay_on_top(self):
         global imgList
-        self.setstayontop.emit(imgList.toggleStayOnTop())
+        stay_on_top = imgList.toggleStayOnTop()
+        self.setstayontop.emit(stay_on_top)
+        self.top_chrome_visible()
         self._sync_auxiliary_window_stay_on_top()
 
     @pyqtSlot(str)
