@@ -1,5 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import QtQuick.Effects
 import QtQuick.Layouts 1.0
 import QtQuick.Window 2.15
 
@@ -21,6 +22,7 @@ ApplicationWindow {
         "settings.checkUpdatesBusy": {"en": "Checking For Updates...", "zh": "正在检查更新..."},
         "settings.updateProxy": {"en": "Update Proxy...", "zh": "更新代理..."},
         "settings.lockImageViewportAspectRatio": {"en": "Lock Image Viewport Aspect Ratio", "zh": "锁定图片视口比例"},
+        "settings.grayscaleDisplay": {"en": "Grayscale Display", "zh": "灰度显示"},
         "language.english": {"en": "English", "zh": "英语"},
         "language.chinese": {"en": "Chinese", "zh": "中文"},
         "file.setImageFolder": {"en": "Set Image Folder...", "zh": "设置图片文件夹..."},
@@ -125,7 +127,9 @@ ApplicationWindow {
         "toast.mosaicEnabled": {"en": "Mosaic enabled", "zh": "马赛克已开启"},
         "toast.mosaicDisabled": {"en": "Mosaic disabled", "zh": "马赛克已关闭"},
         "toast.lockImageViewportEnabled": {"en": "Image viewport aspect ratio locked", "zh": "图片视口比例已锁定"},
-        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"}
+        "toast.lockImageViewportDisabled": {"en": "Image viewport aspect ratio unlocked", "zh": "图片视口比例已解锁"},
+        "toast.grayscaleDisplayEnabled": {"en": "Grayscale display enabled", "zh": "灰度显示已开启"},
+        "toast.grayscaleDisplayDisabled": {"en": "Grayscale display disabled", "zh": "灰度显示已关闭"}
     })
 
     QtObject {
@@ -354,11 +358,12 @@ ApplicationWindow {
     property bool prestartCountdownActive: false
     property int prestartCountdownValue: 0
 
-    property bool stayOnTop: true
+    property bool stayOnTop: false
     property bool canRevealInExplorer: false
     property bool flipHorizontalEnabled: false
     property bool flipVerticalEnabled: false
     property bool showTopChrome: true
+    property bool grayscaleDisplayEnabled: false
 
     property int colorBlocksMinStripes: 1
     property int colorBlocksMaxStripes: 20
@@ -380,6 +385,9 @@ ApplicationWindow {
     property string updateProxyUrl: ""
     property bool updateBusy: false
     property bool lockImageViewportAspectRatio: false
+    property bool transientWindowResize: false
+    property int preStayOnTopWindowWidth: 840
+    property int preStayOnTopWindowHeight: 1120
 
     property var recentImagePaths: []
     property bool applyingBackendWindowSize: false
@@ -459,6 +467,30 @@ ApplicationWindow {
         if (root.contentItem && root.contentItem.forceActiveFocus) {
             root.contentItem.forceActiveFocus();
         }
+    }
+
+    function shouldLockImageViewport() {
+        return lockImageViewportAspectRatio || stayOnTop;
+    }
+
+    function canDragWindowFromContent() {
+        return stayOnTop && !showTopChrome;
+    }
+
+    function startContentWindowMove() {
+        if (!canDragWindowFromContent()) {
+            return false;
+        }
+
+        try {
+            if (root.startSystemMove) {
+                root.startSystemMove();
+                return true;
+            }
+        } catch (error) {
+            debugLog("startSystemMove failed: " + error);
+        }
+        return false;
     }
 
     function isTopMenuTitleVisible(title) {
@@ -1004,17 +1036,118 @@ ApplicationWindow {
     }
 
     function lockedViewportWidth(containerWidth, containerHeight, imageRatio) {
-        if (!lockImageViewportAspectRatio || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
+        if (!shouldLockImageViewport() || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
             return containerWidth;
         }
         return Math.round(Math.min(containerWidth, containerHeight * imageRatio));
     }
 
     function lockedViewportHeight(containerWidth, containerHeight, imageRatio) {
-        if (!lockImageViewportAspectRatio || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
+        if (!shouldLockImageViewport() || imageRatio <= 0 || containerWidth <= 0 || containerHeight <= 0) {
             return containerHeight;
         }
         return Math.round(Math.min(containerHeight, containerWidth / imageRatio));
+    }
+
+    function visibleImageAspectRatio(imageItem, viewportItem, sourceRatio) {
+        if (!imageItem || !viewportItem || sourceRatio <= 0) {
+            return sourceRatio;
+        }
+        if (viewportItem.imageScale <= viewportItem.minImageScale + 0.0001) {
+            return sourceRatio;
+        }
+
+        var left = Math.max(0, imageItem.x);
+        var top = Math.max(0, imageItem.y);
+        var right = Math.min(viewportItem.width, imageItem.x + imageItem.width);
+        var bottom = Math.min(viewportItem.height, imageItem.y + imageItem.height);
+        var visibleWidth = right - left;
+        var visibleHeight = bottom - top;
+        if (visibleWidth <= 1 || visibleHeight <= 1) {
+            return sourceRatio;
+        }
+        return visibleWidth / visibleHeight;
+    }
+
+    function updateImageViewportLocks() {
+        if (photoSwitchingViewport) {
+            photoSwitchingViewport.lockedViewportAspectRatio = 0;
+            photoSwitchingViewport.applyImageGeometry();
+            photoSwitchingViewport.updateLockedViewportAspectRatio();
+        }
+        if (colorPhotoViewport) {
+            colorPhotoViewport.lockedViewportAspectRatio = 0;
+            colorPhotoViewport.applyImageGeometry();
+            colorPhotoViewport.updateLockedViewportAspectRatio();
+        }
+        fitWindowToActiveImageViewport();
+    }
+
+    function setTransientWindowSize(newWidth, newHeight) {
+        transientWindowResize = true;
+        var roundedWidth = Math.round(newWidth);
+        var roundedHeight = Math.round(newHeight);
+        if (Math.abs(roundedWidth - Math.round(width)) <= 1
+                && Math.abs(roundedHeight - Math.round(height)) <= 1) {
+            transientWindowResize = false;
+            return;
+        }
+        width = roundedWidth;
+        height = roundedHeight;
+        Qt.callLater(function() {
+            transientWindowResize = false;
+        });
+    }
+
+    function fitWindowToActiveImageViewport() {
+        if (!shouldLockImageViewport() || !(isPhotoSwitchingMode() || isColorPhotoMode())) {
+            return;
+        }
+
+        var viewport = activeImageViewport();
+        if (!viewport) {
+            return;
+        }
+
+        var ratio = viewport.lockedViewportAspectRatio > 0
+            ? viewport.lockedViewportAspectRatio
+            : viewport.viewportAspectRatio;
+        if (ratio <= 0 || width <= 0 || height <= 0) {
+            return;
+        }
+
+        var chromeHeight = showTopChrome && appMenuBar
+            ? Math.max(0, appMenuBar.height)
+            : 0;
+        var minWidth = 80;
+        var minContentHeight = 80;
+        var maxWidth = maxAllowedWindowWidth();
+        var maxContentHeight = Math.max(minContentHeight, maxAllowedWindowHeight() - chromeHeight);
+        var targetWidth = Math.min(Math.max(width, minWidth), maxWidth);
+        var targetContentHeight = Math.min(Math.max(height - chromeHeight, minContentHeight), maxContentHeight);
+        if (targetWidth / targetContentHeight > ratio) {
+            targetWidth = targetContentHeight * ratio;
+        } else {
+            targetContentHeight = targetWidth / ratio;
+        }
+        if (targetWidth < minWidth) {
+            targetWidth = minWidth;
+            targetContentHeight = targetWidth / ratio;
+        }
+        if (targetContentHeight < minContentHeight) {
+            targetContentHeight = minContentHeight;
+            targetWidth = targetContentHeight * ratio;
+        }
+        if (targetWidth > maxWidth) {
+            targetWidth = maxWidth;
+            targetContentHeight = targetWidth / ratio;
+        }
+        if (targetContentHeight > maxContentHeight) {
+            targetContentHeight = maxContentHeight;
+            targetWidth = targetContentHeight * ratio;
+        }
+
+        setTransientWindowSize(targetWidth, targetContentHeight + chromeHeight);
     }
 
     function saveViewStateForViewport(viewport, imagePath) {
@@ -1092,7 +1225,7 @@ ApplicationWindow {
     function styleGeneratedSubMenuItems() {
         styleGeneratedSubMenuItem(fileMenu.itemAt(1));
         styleGeneratedSubMenuItem(timerMenu.itemAt(6));
-        styleGeneratedSubMenuItem(settingsMenu.itemAt(4));
+        styleGeneratedSubMenuItem(settingsMenu.itemAt(5));
     }
 
     function syncTopMenus() {
@@ -1354,6 +1487,11 @@ ApplicationWindow {
         var willEnable = !lockImageViewportAspectRatio;
         backend.toggle_lock_image_viewport_aspect_ratio();
         showActionToast(willEnable ? t("toast.lockImageViewportEnabled") : t("toast.lockImageViewportDisabled"));
+    }
+
+    function toggleGrayscaleDisplayAction() {
+        grayscaleDisplayEnabled = !grayscaleDisplayEnabled;
+        showActionToast(grayscaleDisplayEnabled ? t("toast.grayscaleDisplayEnabled") : t("toast.grayscaleDisplayDisabled"));
     }
 
     function copyImageAction() {
@@ -2052,6 +2190,11 @@ ApplicationWindow {
                 onTriggered: toggleLockImageViewportAspectRatioAction()
             }
 
+            CompactMenuItem {
+                text: (grayscaleDisplayEnabled ? "✓ " : "") + t("settings.grayscaleDisplay")
+                onTriggered: toggleGrayscaleDisplayAction()
+            }
+
             MenuSeparator {}
 
             Menu {
@@ -2375,7 +2518,15 @@ ApplicationWindow {
         }
 
         function onSetstayontop(enabled) {
+            if (enabled && !stayOnTop) {
+                preStayOnTopWindowWidth = Math.round(width);
+                preStayOnTopWindowHeight = Math.round(height);
+            }
             stayOnTop = enabled;
+            if (!enabled) {
+                setTransientWindowSize(preStayOnTopWindowWidth, preStayOnTopWindowHeight);
+            }
+            Qt.callLater(updateImageViewportLocks);
         }
 
         function onSettopchromevisible(enabled) {
@@ -2383,6 +2534,7 @@ ApplicationWindow {
             Qt.callLater(function() {
                 root.show();
                 returnFocusToApp();
+                updateImageViewportLocks();
             });
         }
 
@@ -2491,8 +2643,7 @@ ApplicationWindow {
 
         function onSetlockimageviewportaspectratio(enabled) {
             lockImageViewportAspectRatio = enabled;
-            photoSwitchingViewport.applyImageGeometry();
-            colorPhotoViewport.applyImageGeometry();
+            updateImageViewportLocks();
         }
 
         function onSetprotectedvideoexportavailable(enabled) {
@@ -2528,7 +2679,7 @@ ApplicationWindow {
         interval: 400
         repeat: false
         onTriggered: {
-            if (!backend) {
+            if (!backend || stayOnTop) {
                 return;
             }
 
@@ -2538,6 +2689,13 @@ ApplicationWindow {
             window_height = newH;
             backend.save_window_size(String(newW), String(newH));
         }
+    }
+
+    Timer {
+        id: fitWindowToViewportTimer
+        interval: 160
+        repeat: false
+        onTriggered: fitWindowToActiveImageViewport()
     }
 
     Timer {
@@ -2591,14 +2749,20 @@ ApplicationWindow {
     }
 
     onWidthChanged: {
-        if (!applyingBackendWindowSize && visible && width > 0 && height > 0) {
+        if (!applyingBackendWindowSize && !stayOnTop && visible && width > 0 && height > 0) {
             persistWindowSizeTimer.restart();
+        }
+        if (!transientWindowResize && shouldLockImageViewport() && visible && width > 0 && height > 0) {
+            fitWindowToViewportTimer.restart();
         }
     }
 
     onHeightChanged: {
-        if (!applyingBackendWindowSize && visible && width > 0 && height > 0) {
+        if (!applyingBackendWindowSize && !stayOnTop && visible && width > 0 && height > 0) {
             persistWindowSizeTimer.restart();
+        }
+        if (!transientWindowResize && shouldLockImageViewport() && visible && width > 0 && height > 0) {
+            fitWindowToViewportTimer.restart();
         }
     }
 
@@ -2632,8 +2796,18 @@ ApplicationWindow {
                 id: photoSwitchingViewport
                 anchors.centerIn: parent
                 readonly property real viewportAspectRatio: imageViewportAspectRatio(photoSwitchingSourceMeta, photoSwitchingImage)
-                width: lockedViewportWidth(photoSwitchingPage.width, photoSwitchingPage.height, viewportAspectRatio)
-                height: lockedViewportHeight(photoSwitchingPage.width, photoSwitchingPage.height, viewportAspectRatio)
+                property real lockedViewportAspectRatio: 0
+                property bool suppressViewportRelock: false
+                width: lockedViewportWidth(
+                    photoSwitchingPage.width,
+                    photoSwitchingPage.height,
+                    lockedViewportAspectRatio > 0 ? lockedViewportAspectRatio : viewportAspectRatio
+                )
+                height: lockedViewportHeight(
+                    photoSwitchingPage.width,
+                    photoSwitchingPage.height,
+                    lockedViewportAspectRatio > 0 ? lockedViewportAspectRatio : viewportAspectRatio
+                )
                 clip: true
 
                 property real imageScale: 1.0
@@ -2682,12 +2856,29 @@ ApplicationWindow {
                     photoSwitchingImage.y = (height - targetHeight) / 2 + imageOffsetY;
                 }
 
+                function updateLockedViewportAspectRatio() {
+                    if (!shouldLockImageViewport()) {
+                        lockedViewportAspectRatio = 0;
+                        return;
+                    }
+                    if (suppressViewportRelock) {
+                        return;
+                    }
+                    lockedViewportAspectRatio = visibleImageAspectRatio(
+                        photoSwitchingImage,
+                        photoSwitchingViewport,
+                        viewportAspectRatio
+                    );
+                }
+
                 function resetView() {
                     imageScale = 1.0;
                     imageOffsetX = 0;
                     imageOffsetY = 0;
                     imageRotation = 0;
                     applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                    fitWindowToActiveImageViewport();
                 }
 
                 function applyPendingViewState() {
@@ -2708,6 +2899,8 @@ ApplicationWindow {
                     }
 
                     applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                    fitWindowToActiveImageViewport();
                 }
 
                 function zoomAt(mouseX, mouseY, deltaY) {
@@ -2730,6 +2923,7 @@ ApplicationWindow {
                     var imageXRatio = oldWidth > 0 ? (mouseX - oldX) / oldWidth : 0.5;
                     var imageYRatio = oldHeight > 0 ? (mouseY - oldY) / oldHeight : 0.5;
 
+                    suppressViewportRelock = true;
                     imageScale = newScale;
                     var newWidth = fitted.w * imageScale;
                     var newHeight = fitted.h * imageScale;
@@ -2737,11 +2931,18 @@ ApplicationWindow {
                     imageOffsetY = mouseY - imageYRatio * newHeight - (height - newHeight) / 2;
 
                     applyImageGeometry();
+                    photoSwitchingViewportRelockTimer.restart();
                     persistPhotoSwitchingViewStateTimer.restart();
                 }
 
-                onWidthChanged: applyImageGeometry()
-                onHeightChanged: applyImageGeometry()
+                onWidthChanged: {
+                    applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                }
+                onHeightChanged: {
+                    applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                }
 
                 Image {
                     id: photoSwitchingSourceMeta
@@ -2770,6 +2971,10 @@ ApplicationWindow {
                         ? Math.max(8, Math.round(photoSwitchingSourceMeta.sourceSize.height / mosaicDownsampleFactor))
                         : 0
                     fillMode: Image.PreserveAspectFit
+                    layer.enabled: grayscaleDisplayEnabled
+                    layer.effect: MultiEffect {
+                        saturation: -1.0
+                    }
                     transform: [
                         Scale {
                             origin.x: photoSwitchingImage.width / 2
@@ -2787,7 +2992,19 @@ ApplicationWindow {
                     onStatusChanged: {
                         if (status === Image.Ready) {
                             photoSwitchingViewport.applyPendingViewState();
+                            Qt.callLater(fitWindowToActiveImageViewport);
                         }
+                    }
+                }
+
+                Timer {
+                    id: photoSwitchingViewportRelockTimer
+                    interval: 180
+                    repeat: false
+                    onTriggered: {
+                        photoSwitchingViewport.suppressViewportRelock = false;
+                        photoSwitchingViewport.updateLockedViewportAspectRatio();
+                        fitWindowToActiveImageViewport();
                     }
                 }
 
@@ -2795,14 +3012,23 @@ ApplicationWindow {
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
                     hoverEnabled: true
-                    cursorShape: ((pressedButtons & Qt.LeftButton) ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
+                    cursorShape: canDragWindowFromContent()
+                        ? Qt.SizeAllCursor
+                        : ((pressedButtons & Qt.LeftButton) ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
 
                     onPressed: function(mouse) {
+                        if (startContentWindowMove()) {
+                            mouse.accepted = true;
+                            return;
+                        }
                         photoSwitchingViewport.dragLastX = mouse.x;
                         photoSwitchingViewport.dragLastY = mouse.y;
                     }
 
                     onPositionChanged: function(mouse) {
+                        if (canDragWindowFromContent()) {
+                            return;
+                        }
                         if ((mouse.buttons & Qt.LeftButton) === 0) {
                             return;
                         }
@@ -2812,6 +3038,8 @@ ApplicationWindow {
                         photoSwitchingViewport.dragLastX = mouse.x;
                         photoSwitchingViewport.dragLastY = mouse.y;
                         photoSwitchingViewport.applyImageGeometry();
+                        photoSwitchingViewport.updateLockedViewportAspectRatio();
+                        fitWindowToViewportTimer.restart();
                         persistPhotoSwitchingViewStateTimer.restart();
                     }
 
@@ -2895,6 +3123,10 @@ ApplicationWindow {
                 id: colorBlocksCanvas
                 anchors.fill: parent
                 color: "#000000"
+                layer.enabled: grayscaleDisplayEnabled
+                layer.effect: MultiEffect {
+                    saturation: -1.0
+                }
 
                 onWidthChanged: regenerateColorBlocksShapes()
                 onHeightChanged: regenerateColorBlocksShapes()
@@ -2929,8 +3161,14 @@ ApplicationWindow {
 
                 MouseArea {
                     anchors.fill: parent
-                    acceptedButtons: Qt.RightButton
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     hoverEnabled: true
+
+                    onPressed: function(mouse) {
+                        if (mouse.button === Qt.LeftButton && startContentWindowMove()) {
+                            mouse.accepted = true;
+                        }
+                    }
 
                     onWheel: function(wheel) {
                         if ((wheel.modifiers & Qt.ControlModifier) !== 0) {
@@ -2945,6 +3183,9 @@ ApplicationWindow {
                     }
 
                     onClicked: function(mouse) {
+                        if (mouse.button !== Qt.RightButton) {
+                            return;
+                        }
                         debugLog("colorBlocks right click at (" + mouse.x + "," + mouse.y + ")");
                         openContextMenu(colorBlocksContextMenu, this, mouse);
                         mouse.accepted = true;
@@ -2983,8 +3224,18 @@ ApplicationWindow {
                 id: colorPhotoViewport
                 anchors.centerIn: parent
                 readonly property real viewportAspectRatio: imageViewportAspectRatio(colorPhotoSourceMeta, colorPhotoImage)
-                width: lockedViewportWidth(colorPhotoPage.width, colorPhotoPage.height, viewportAspectRatio)
-                height: lockedViewportHeight(colorPhotoPage.width, colorPhotoPage.height, viewportAspectRatio)
+                property real lockedViewportAspectRatio: 0
+                property bool suppressViewportRelock: false
+                width: lockedViewportWidth(
+                    colorPhotoPage.width,
+                    colorPhotoPage.height,
+                    lockedViewportAspectRatio > 0 ? lockedViewportAspectRatio : viewportAspectRatio
+                )
+                height: lockedViewportHeight(
+                    colorPhotoPage.width,
+                    colorPhotoPage.height,
+                    lockedViewportAspectRatio > 0 ? lockedViewportAspectRatio : viewportAspectRatio
+                )
                 clip: true
 
                 property real imageScale: 1.0
@@ -3033,12 +3284,29 @@ ApplicationWindow {
                     colorPhotoImage.y = (height - targetHeight) / 2 + imageOffsetY;
                 }
 
+                function updateLockedViewportAspectRatio() {
+                    if (!shouldLockImageViewport()) {
+                        lockedViewportAspectRatio = 0;
+                        return;
+                    }
+                    if (suppressViewportRelock) {
+                        return;
+                    }
+                    lockedViewportAspectRatio = visibleImageAspectRatio(
+                        colorPhotoImage,
+                        colorPhotoViewport,
+                        viewportAspectRatio
+                    );
+                }
+
                 function resetView() {
                     imageScale = 1.0;
                     imageOffsetX = 0;
                     imageOffsetY = 0;
                     imageRotation = 0;
                     applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                    fitWindowToActiveImageViewport();
                 }
 
                 function applyPendingViewState() {
@@ -3059,6 +3327,8 @@ ApplicationWindow {
                     }
 
                     applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                    fitWindowToActiveImageViewport();
                 }
 
                 function zoomAt(mouseX, mouseY, deltaY) {
@@ -3081,6 +3351,7 @@ ApplicationWindow {
                     var imageXRatio = oldWidth > 0 ? (mouseX - oldX) / oldWidth : 0.5;
                     var imageYRatio = oldHeight > 0 ? (mouseY - oldY) / oldHeight : 0.5;
 
+                    suppressViewportRelock = true;
                     imageScale = newScale;
                     var newWidth = fitted.w * imageScale;
                     var newHeight = fitted.h * imageScale;
@@ -3088,11 +3359,18 @@ ApplicationWindow {
                     imageOffsetY = mouseY - imageYRatio * newHeight - (height - newHeight) / 2;
 
                     applyImageGeometry();
+                    colorPhotoViewportRelockTimer.restart();
                     persistColorPhotoViewStateTimer.restart();
                 }
 
-                onWidthChanged: applyImageGeometry()
-                onHeightChanged: applyImageGeometry()
+                onWidthChanged: {
+                    applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                }
+                onHeightChanged: {
+                    applyImageGeometry();
+                    updateLockedViewportAspectRatio();
+                }
 
                 Image {
                     id: colorPhotoSourceMeta
@@ -3121,6 +3399,10 @@ ApplicationWindow {
                         ? Math.max(8, Math.round(colorPhotoSourceMeta.sourceSize.height / mosaicDownsampleFactor))
                         : 0
                     fillMode: Image.PreserveAspectFit
+                    layer.enabled: grayscaleDisplayEnabled
+                    layer.effect: MultiEffect {
+                        saturation: -1.0
+                    }
                     transform: [
                         Scale {
                             origin.x: colorPhotoImage.width / 2
@@ -3138,7 +3420,19 @@ ApplicationWindow {
                     onStatusChanged: {
                         if (status === Image.Ready) {
                             colorPhotoViewport.applyPendingViewState();
+                            Qt.callLater(fitWindowToActiveImageViewport);
                         }
+                    }
+                }
+
+                Timer {
+                    id: colorPhotoViewportRelockTimer
+                    interval: 180
+                    repeat: false
+                    onTriggered: {
+                        colorPhotoViewport.suppressViewportRelock = false;
+                        colorPhotoViewport.updateLockedViewportAspectRatio();
+                        fitWindowToActiveImageViewport();
                     }
                 }
 
@@ -3146,14 +3440,23 @@ ApplicationWindow {
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
                     hoverEnabled: true
-                    cursorShape: ((pressedButtons & Qt.LeftButton) ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
+                    cursorShape: canDragWindowFromContent()
+                        ? Qt.SizeAllCursor
+                        : ((pressedButtons & Qt.LeftButton) ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
 
                     onPressed: function(mouse) {
+                        if (startContentWindowMove()) {
+                            mouse.accepted = true;
+                            return;
+                        }
                         colorPhotoViewport.dragLastX = mouse.x;
                         colorPhotoViewport.dragLastY = mouse.y;
                     }
 
                     onPositionChanged: function(mouse) {
+                        if (canDragWindowFromContent()) {
+                            return;
+                        }
                         if ((mouse.buttons & Qt.LeftButton) === 0) {
                             return;
                         }
@@ -3163,6 +3466,8 @@ ApplicationWindow {
                         colorPhotoViewport.dragLastX = mouse.x;
                         colorPhotoViewport.dragLastY = mouse.y;
                         colorPhotoViewport.applyImageGeometry();
+                        colorPhotoViewport.updateLockedViewportAspectRatio();
+                        fitWindowToViewportTimer.restart();
                         persistColorPhotoViewStateTimer.restart();
                     }
 
