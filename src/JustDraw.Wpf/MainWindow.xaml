@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Just Draw!" Height="760" Width="640"
         MinHeight="320" MinWidth="320"
-        Background="Black"
+        Background="#050607"
         WindowStartupLocation="CenterScreen"
         Loaded="Window_Loaded"
         Closing="Window_Closing"
@@ -11,17 +11,24 @@
         SizeChanged="Window_SizeChanged">
     <Window.Resources>
         <Style TargetType="Menu">
-            <Setter Property="Background" Value="#202020" />
-            <Setter Property="Foreground" Value="#F2F2F2" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="6,0" />
         </Style>
         <Style TargetType="MenuItem">
-            <Setter Property="Background" Value="#202020" />
-            <Setter Property="Foreground" Value="#F2F2F2" />
-            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#F2F2F2" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        </Style>
+        <Style TargetType="ContextMenu">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
         </Style>
     </Window.Resources>
 
@@ -85,15 +92,16 @@
                 </MenuItem>
                 <MenuItem x:Name="CheckForUpdatesItem" Header="Check For Updates" Click="CheckForUpdates_Click" />
                 <MenuItem x:Name="UpdateProxyItem" Header="Update Proxy..." Click="UpdateProxy_Click" />
+                <MenuItem x:Name="ThemeAccentItem" Header="Theme Accent..." Click="ThemeAccent_Click" />
                 <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
                 <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />
                 <MenuItem x:Name="SampleImageColorsItem" Header="Sample 30 Image Colors" Click="SampleImageColors_Click" />
             </MenuItem>
         </Menu>
 
-        <Grid x:Name="RootSurface" Background="Black">
-            <Grid x:Name="PhotoSwitchingPage" Background="Black">
-                <Grid x:Name="PhotoViewport" Background="Black" ClipToBounds="True"
+        <Grid x:Name="RootSurface" Background="{DynamicResource AppBackgroundBrush}">
+            <Grid x:Name="PhotoSwitchingPage" Background="{DynamicResource AppBackgroundBrush}">
+                <Grid x:Name="PhotoViewport" Background="{DynamicResource AppBackgroundBrush}" ClipToBounds="True"
                       MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"
                       MouseLeftButtonUp="ImageViewport_MouseLeftButtonUp"
                       MouseMove="ImageViewport_MouseMove"
@@ -108,7 +116,8 @@
                 </Grid>
 
                 <Border x:Name="TimerBadge" HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Margin="12" Padding="18,9" Background="#AA101010" CornerRadius="8">
+                        Margin="14" Padding="18,9" Background="{DynamicResource TimerBadgeBrush}"
+                        BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8">
                     <TextBlock x:Name="TimerText" Text="00:00" FontSize="24" FontWeight="SemiBold"
                                MouseLeftButtonUp="TimerText_MouseLeftButtonUp" />
                 </Border>
@@ -119,18 +128,19 @@
                 </Grid>
             </Grid>
 
-            <Grid x:Name="ColorBlocksPage" Background="Black" Visibility="Collapsed"
+            <Grid x:Name="ColorBlocksPage" Background="{DynamicResource AppBackgroundBrush}" Visibility="Collapsed"
                   MouseRightButtonUp="ColorBlocksPage_MouseRightButtonUp"
                   MouseWheel="ColorBlocksPage_MouseWheel">
-                <Canvas x:Name="ColorBlocksCanvas" Background="Black" SizeChanged="ColorBlocksCanvas_SizeChanged" />
+                <Canvas x:Name="ColorBlocksCanvas" Background="{DynamicResource AppBackgroundBrush}" SizeChanged="ColorBlocksCanvas_SizeChanged" />
                 <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12"
-                        Padding="12,7" Background="#AA101010" CornerRadius="8">
+                        Padding="12,7" Background="{DynamicResource TimerBadgeBrush}"
+                        BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8">
                     <TextBlock x:Name="ColorCountText" Text="Colors: 1" FontSize="13" />
                 </Border>
             </Grid>
 
-            <Grid x:Name="ColorPhotoPage" Background="Black" Visibility="Collapsed">
-                <Grid x:Name="ColorPhotoViewport" Background="Black" ClipToBounds="True"
+            <Grid x:Name="ColorPhotoPage" Background="{DynamicResource AppBackgroundBrush}" Visibility="Collapsed">
+                <Grid x:Name="ColorPhotoViewport" Background="{DynamicResource AppBackgroundBrush}" ClipToBounds="True"
                       MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"
                       MouseLeftButtonUp="ImageViewport_MouseLeftButtonUp"
                       MouseMove="ImageViewport_MouseMove"
@@ -147,7 +157,9 @@
 
             <Border x:Name="Toast" HorizontalAlignment="Center" VerticalAlignment="Bottom"
                     Margin="0,0,0,24" Padding="16,9" CornerRadius="8"
-                    Background="#DD202020" Visibility="Collapsed">
+                    Background="{DynamicResource ToastBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1"
+                    Visibility="Collapsed">
                 <TextBlock x:Name="ToastText" FontSize="13" />
             </Border>
         </Grid>

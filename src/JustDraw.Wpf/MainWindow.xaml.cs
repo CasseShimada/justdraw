@@ -59,6 +59,7 @@ public partial class MainWindow : Window
         _state = StateStore.Load();
         InitializeComponent();
         ApplyIcon();
+        ApplyTheme();
         ApplySafeStartupSize();
         Topmost = _state.StayOnTop;
         _timer.Tick += Timer_Tick;
@@ -113,6 +114,79 @@ public partial class MainWindow : Window
     private string T(string en, string zh) => IsChinese ? zh : en;
 
     private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
+
+    private void ApplyTheme()
+    {
+        var accent = ParseThemeColor(_state.ThemeAccentColor);
+        var background = MediaColor.FromRgb(5, 7, 9);
+        var surface = MediaColor.FromRgb(18, 22, 25);
+        var panel = MediaColor.FromRgb(28, 33, 37);
+        Resources["AccentBrush"] = FrozenBrush(accent);
+        Resources["AccentSoftBrush"] = FrozenBrush(MediaColor.FromArgb(58, accent.R, accent.G, accent.B));
+        Resources["AppBackgroundBrush"] = FrozenBrush(background);
+        Resources["SurfaceBrush"] = FrozenBrush(surface);
+        Resources["PanelBrush"] = FrozenBrush(panel);
+        Resources["TextBrush"] = FrozenBrush(MediaColor.FromRgb(242, 246, 247));
+        Resources["MutedTextBrush"] = FrozenBrush(MediaColor.FromRgb(160, 170, 175));
+        Resources["TimerBadgeBrush"] = FrozenBrush(MediaColor.FromArgb(226, 10, 12, 14));
+        Resources["ToastBrush"] = FrozenBrush(MediaColor.FromArgb(238, 22, 27, 31));
+        Resources[System.Windows.SystemColors.HighlightBrushKey] = FrozenBrush(MediaColor.FromArgb(180, accent.R, accent.G, accent.B));
+        Resources[System.Windows.SystemColors.HighlightTextBrushKey] = FrozenBrush(MediaColor.FromRgb(255, 255, 255));
+        Background = (System.Windows.Media.Brush)Resources["AppBackgroundBrush"];
+        RootSurface?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        PhotoSwitchingPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        PhotoViewport?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        ColorBlocksPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        ColorBlocksCanvas?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        ColorPhotoPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        ColorPhotoViewport?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+    }
+
+    private static SolidColorBrush FrozenBrush(MediaColor color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static MediaColor ParseThemeColor(string value)
+    {
+        try
+        {
+            if (TryParseThemeColor(value, out var color))
+            {
+                return color;
+            }
+        }
+        catch
+        {
+            // Fall back to default accent.
+        }
+
+        return MediaColor.FromRgb(14, 165, 168);
+    }
+
+    private static bool TryParseThemeColor(string value, out MediaColor color)
+    {
+        color = default;
+        try
+        {
+            var converted = System.Windows.Media.ColorConverter.ConvertFromString(string.IsNullOrWhiteSpace(value) ? "#0EA5A8" : value.Trim());
+            if (converted is not MediaColor parsed)
+            {
+                return false;
+            }
+
+            color = MediaColor.FromRgb(parsed.R, parsed.G, parsed.B);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ColorToHex(MediaColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
     private void ApplySafeStartupSize()
     {
@@ -805,6 +879,7 @@ public partial class MainWindow : Window
         ChineseLanguageItem.Header = T("Chinese", "中文");
         CheckForUpdatesItem.Header = T("Check For Updates", "检查更新");
         UpdateProxyItem.Header = T("Update Proxy...", "更新代理...");
+        ThemeAccentItem.Header = T("Theme Accent...", "主题色...");
         LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
         SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
@@ -1576,6 +1651,98 @@ public partial class MainWindow : Window
         {
             ShowToast(ex.Message);
         }
+    }
+
+    private void ThemeAccent_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = ShowThemeAccentDialog();
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        if (!TryParseThemeColor(selected, out var color))
+        {
+            ShowToast(T("Theme color is invalid", "主题色无效"));
+            return;
+        }
+
+        _state.ThemeAccentColor = ColorToHex(color);
+        ApplyTheme();
+        ShowToast(T("Theme color updated", "主题色已更新"));
+        UpdateAllUi();
+    }
+
+    private string ShowThemeAccentDialog()
+    {
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = T("Theme Accent", "主题色"),
+            Width = 360,
+            Height = 260,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"],
+            Topmost = _state.StayOnTop
+        };
+
+        var root = new StackPanel { Margin = new Thickness(18) };
+        root.Children.Add(new TextBlock
+        {
+            Text = T("Choose an accent color or enter a hex value.", "选择一个主题色，或输入十六进制颜色值。"),
+            Foreground = (System.Windows.Media.Brush)Resources["TextBrush"],
+            Margin = new Thickness(0, 0, 0, 12)
+        });
+
+        var swatches = new System.Windows.Controls.Primitives.UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 14) };
+        var presets = new[] { "#0EA5A8", "#3B82F6", "#8B5CF6", "#E11D48", "#F59E0B", "#22C55E" };
+        string? selected = null;
+        foreach (var preset in presets)
+        {
+            var color = ParseThemeColor(preset);
+            var button = new System.Windows.Controls.Button
+            {
+                Width = 42,
+                Height = 34,
+                Margin = new Thickness(4),
+                Background = FrozenBrush(color),
+                BorderBrush = System.Windows.Media.Brushes.White,
+                BorderThickness = new Thickness(preset.Equals(ColorToHex(ParseThemeColor(_state.ThemeAccentColor)), StringComparison.OrdinalIgnoreCase) ? 2 : 0),
+                ToolTip = preset
+            };
+            button.Click += (_, _) =>
+            {
+                selected = preset;
+                dialog.DialogResult = true;
+            };
+            swatches.Children.Add(button);
+        }
+
+        var input = new System.Windows.Controls.TextBox
+        {
+            Text = ColorToHex(ParseThemeColor(_state.ThemeAccentColor)),
+            Margin = new Thickness(0, 0, 0, 14),
+            Padding = new Thickness(8, 5, 8, 5)
+        };
+
+        var actions = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+        var cancel = new System.Windows.Controls.Button { Content = T("Cancel", "取消"), Padding = new Thickness(14, 5, 14, 5), Margin = new Thickness(0, 0, 8, 0) };
+        var apply = new System.Windows.Controls.Button { Content = T("Apply", "应用"), Padding = new Thickness(16, 5, 16, 5), Background = (System.Windows.Media.Brush)Resources["AccentBrush"], Foreground = System.Windows.Media.Brushes.White };
+        cancel.Click += (_, _) => dialog.DialogResult = false;
+        apply.Click += (_, _) =>
+        {
+            selected = input.Text.Trim();
+            dialog.DialogResult = true;
+        };
+        actions.Children.Add(cancel);
+        actions.Children.Add(apply);
+
+        root.Children.Add(swatches);
+        root.Children.Add(input);
+        root.Children.Add(actions);
+        dialog.Content = root;
+        return dialog.ShowDialog() == true ? selected ?? "" : "";
     }
 
     private async void ProtectedVideoExport_Click(object sender, RoutedEventArgs e)

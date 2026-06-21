@@ -55,6 +55,7 @@ public sealed class JustDrawState
     public bool TimerFinishNotificationEnabled { get; set; }
     public bool SampleImageColorsEnabled { get; set; }
     public bool GrayscaleDisplayEnabled { get; set; }
+    public string ThemeAccentColor { get; set; } = "#0EA5A8";
     public int MosaicDownsampleFactor { get; set; } = 16;
     public int ColorBlocksStripeCount { get; set; } = 1;
     public double ColorBlocksMinLuma { get; set; } = 0.22;
