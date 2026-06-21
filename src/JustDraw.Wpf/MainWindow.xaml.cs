@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private readonly HashSet<AppMode> _loadedSources = [];
     private readonly List<MediaColor> _palette = [];
     private readonly List<MediaColor> _sampledImageColors = [];
+    private readonly Dictionary<MenuItem, bool> _menuCheckedStates = [];
 
     private bool _grayscaleDisplayEnabled;
     private bool _sampleImageColorsEnabled;
@@ -232,14 +233,18 @@ public partial class MainWindow : Window
 
     private void StyleMenuItem(MenuItem item)
     {
+        var isChecked = _menuCheckedStates.TryGetValue(item, out var checkedState) && checkedState;
+        var isTopLevel = item.Parent is Menu;
         item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
         item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
-        item.BorderBrush = item.IsChecked
+        item.IsCheckable = false;
+        item.IsChecked = false;
+        item.BorderBrush = isChecked
             ? (System.Windows.Media.Brush)Resources["AccentBrush"]
             : System.Windows.Media.Brushes.Transparent;
-        item.BorderThickness = item.IsChecked ? new Thickness(3, 0, 0, 0) : new Thickness(0);
-        item.Icon = CreateMenuCheckIcon(item.IsChecked);
-        item.Padding = new Thickness(10, 6, 10, 6);
+        item.BorderThickness = isChecked && !isTopLevel ? new Thickness(3, 0, 0, 0) : new Thickness(0);
+        item.Icon = isTopLevel ? null : CreateMenuCheckIcon(isChecked);
+        item.Padding = isTopLevel ? new Thickness(10, 4, 10, 4) : new Thickness(10, 6, 10, 6);
         item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentHoverBrush"];
         item.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Resources["TextBrush"];
         item.Resources[System.Windows.SystemColors.MenuBrushKey] = Resources["PanelBrush"];
@@ -312,6 +317,11 @@ public partial class MainWindow : Window
         {
             StyleMenuItem(child);
         }
+    }
+
+    private void SetMenuChecked(MenuItem item, bool isChecked)
+    {
+        _menuCheckedStates[item] = isChecked;
     }
 
     private void ApplySafeStartupSize()
@@ -931,25 +941,25 @@ public partial class MainWindow : Window
     {
         ApplyLanguage();
         RebuildRecentPathsMenu();
-        PhotoSwitchingModeItem.IsChecked = _state.AppMode == AppMode.PhotoSwitching;
-        ColorBlocksModeItem.IsChecked = _state.AppMode == AppMode.ColorBlocks;
-        ColorPhotoModeItem.IsChecked = _state.AppMode == AppMode.ColorPhoto;
-        RandomPlayItem.IsChecked = ActiveModeState().RandomPlayMode;
-        PrestartCountdownItem.IsChecked = ActiveModeState().PrestartCountdownEnabled;
-        TimerNotificationItem.IsChecked = _state.TimerFinishNotificationEnabled;
-        ShapeModeItem.IsChecked = _state.ColorBlocksShapeModeEnabled;
-        MosaicEnabledItem.IsChecked = IsImageMode && ActiveModeState().MosaicEnabled;
-        StayOnTopItem.IsChecked = _state.StayOnTop;
-        LockAspectItem.IsChecked = _state.LockImageViewportAspectRatio;
-        GrayscaleItem.IsChecked = _grayscaleDisplayEnabled;
-        SampleImageColorsItem.IsChecked = _sampleImageColorsEnabled;
+        SetMenuChecked(PhotoSwitchingModeItem, _state.AppMode == AppMode.PhotoSwitching);
+        SetMenuChecked(ColorBlocksModeItem, _state.AppMode == AppMode.ColorBlocks);
+        SetMenuChecked(ColorPhotoModeItem, _state.AppMode == AppMode.ColorPhoto);
+        SetMenuChecked(RandomPlayItem, ActiveModeState().RandomPlayMode);
+        SetMenuChecked(PrestartCountdownItem, ActiveModeState().PrestartCountdownEnabled);
+        SetMenuChecked(TimerNotificationItem, _state.TimerFinishNotificationEnabled);
+        SetMenuChecked(ShapeModeItem, _state.ColorBlocksShapeModeEnabled);
+        SetMenuChecked(MosaicEnabledItem, IsImageMode && ActiveModeState().MosaicEnabled);
+        SetMenuChecked(StayOnTopItem, _state.StayOnTop);
+        SetMenuChecked(LockAspectItem, _state.LockImageViewportAspectRatio);
+        SetMenuChecked(GrayscaleItem, _grayscaleDisplayEnabled);
+        SetMenuChecked(SampleImageColorsItem, _sampleImageColorsEnabled);
         SampleImageColorsItem.IsEnabled = IsImageMode;
-        EnglishLanguageItem.IsChecked = !IsChinese;
-        ChineseLanguageItem.IsChecked = IsChinese;
+        SetMenuChecked(EnglishLanguageItem, !IsChinese);
+        SetMenuChecked(ChineseLanguageItem, IsChinese);
         ProtectedVideoExportItem.IsEnabled = _videoTools.Available && !_videoExportBusy;
-        TimerAutoNextItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.AutoNext;
-        TimerHoldItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.Hold;
-        TimerOvertimeItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.Overtime;
+        SetMenuChecked(TimerAutoNextItem, ActiveModeState().TimerEndMode == TimerEndMode.AutoNext);
+        SetMenuChecked(TimerHoldItem, ActiveModeState().TimerEndMode == TimerEndMode.Hold);
+        SetMenuChecked(TimerOvertimeItem, ActiveModeState().TimerEndMode == TimerEndMode.Overtime);
         PauseTimerItem.Header = _timerPaused ? T("Resume Timer", "继续计时") : T("Pause Timer", "暂停计时");
         Topmost = _state.StayOnTop;
         TopMenu.Visibility = _state.StayOnTop ? Visibility.Collapsed : Visibility.Visible;
