@@ -1,0 +1,154 @@
+<Window x:Class="JustDraw.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Just Draw!" Height="1120" Width="840"
+        MinHeight="360" MinWidth="360"
+        Background="Black"
+        WindowStartupLocation="CenterScreen"
+        Closing="Window_Closing"
+        KeyDown="Window_KeyDown"
+        SizeChanged="Window_SizeChanged">
+    <Window.Resources>
+        <Style TargetType="Menu">
+            <Setter Property="Background" Value="#202020" />
+            <Setter Property="Foreground" Value="#F2F2F2" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="#202020" />
+            <Setter Property="Foreground" Value="#F2F2F2" />
+            <Setter Property="Padding" Value="8,3" />
+        </Style>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#F2F2F2" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+        <Menu x:Name="TopMenu" DockPanel.Dock="Top">
+            <MenuItem Header="File" x:Name="FileMenu">
+                <MenuItem Header="Set Image Folder..." Click="SetImageFolder_Click" />
+                <MenuItem Header="Recent Paths" x:Name="RecentPathsMenu" />
+                <MenuItem Header="Delete Path Playback State..." Click="DeletePathPlaybackState_Click" />
+                <MenuItem Header="Refresh List Order + Random Image" Click="RefreshRandom_Click" />
+                <MenuItem Header="Reset Current Image State" Click="ResetImageView_Click" />
+                <MenuItem Header="Reset Current Path Image States" Click="ResetCurrentPathImageStates_Click" />
+                <Separator />
+                <MenuItem Header="Exit" Click="Exit_Click" />
+            </MenuItem>
+            <MenuItem Header="Window">
+                <MenuItem x:Name="ProtectedVideoExportItem" Header="Protected Video Export..." Click="ProtectedVideoExport_Click" />
+            </MenuItem>
+            <MenuItem Header="Mode">
+                <MenuItem x:Name="PhotoSwitchingModeItem" Header="Photo Switching" Click="PhotoSwitchingMode_Click" />
+                <MenuItem x:Name="ColorBlocksModeItem" Header="Color Blocks" Click="ColorBlocksMode_Click" />
+                <MenuItem x:Name="ColorPhotoModeItem" Header="Color Photo" Click="ColorPhotoMode_Click" />
+            </MenuItem>
+            <MenuItem Header="Timer" x:Name="TimerMenu">
+                <MenuItem x:Name="PauseTimerItem" Header="Pause Timer" Click="PauseTimer_Click" />
+                <MenuItem Header="Set Timer..." Click="SetTimer_Click" />
+                <MenuItem Header="Reset Timer" Click="ResetTimer_Click" />
+                <MenuItem x:Name="RandomPlayItem" Header="Random Play" Click="RandomPlay_Click" />
+                <MenuItem x:Name="PrestartCountdownItem" Header="3-second Pre-start Countdown" Click="PrestartCountdown_Click" />
+                <MenuItem x:Name="TimerNotificationItem" Header="Timer Finish Notification" Click="TimerNotification_Click" />
+                <MenuItem Header="Timer End Mode">
+                    <MenuItem x:Name="TimerAutoNextItem" Header="Auto Next Image" Click="TimerAutoNext_Click" />
+                    <MenuItem x:Name="TimerHoldItem" Header="Stay On Current Image" Click="TimerHold_Click" />
+                    <MenuItem x:Name="TimerOvertimeItem" Header="Overtime Count Up" Click="TimerOvertime_Click" />
+                </MenuItem>
+            </MenuItem>
+            <MenuItem Header="Color Sense Tools" x:Name="ColorToolsMenu">
+                <MenuItem Header="Increase Colors" Click="IncreaseColors_Click" />
+                <MenuItem Header="Decrease Colors" Click="DecreaseColors_Click" />
+                <MenuItem Header="Refresh Colors" Click="RefreshColors_Click" />
+                <MenuItem x:Name="ShapeModeItem" Header="Shape Mode" Click="ShapeMode_Click" />
+                <MenuItem Header="Set Min Luma..." Click="SetMinLuma_Click" />
+                <MenuItem Header="Set Max Luma..." Click="SetMaxLuma_Click" />
+                <MenuItem Header="Set Min Saturation..." Click="SetMinSaturation_Click" />
+                <Separator />
+                <MenuItem Header="Copy Colors" Click="CopyColors_Click" />
+            </MenuItem>
+            <MenuItem Header="Mosaic" x:Name="MosaicMenu">
+                <MenuItem x:Name="MosaicEnabledItem" Header="Enable Mosaic" Click="MosaicEnabled_Click" />
+                <MenuItem Header="Mosaic Size">
+                    <MenuItem Header="Small" Click="MosaicSmall_Click" />
+                    <MenuItem Header="Medium" Click="MosaicMedium_Click" />
+                    <MenuItem Header="Large" Click="MosaicLarge_Click" />
+                </MenuItem>
+            </MenuItem>
+            <MenuItem Header="Settings">
+                <MenuItem x:Name="StayOnTopItem" Header="Stay On Top" Click="StayOnTop_Click" />
+                <MenuItem Header="Language">
+                    <MenuItem x:Name="EnglishLanguageItem" Header="English" Click="EnglishLanguage_Click" />
+                    <MenuItem x:Name="ChineseLanguageItem" Header="Chinese" Click="ChineseLanguage_Click" />
+                </MenuItem>
+                <MenuItem Header="Check For Updates" Click="CheckForUpdates_Click" />
+                <MenuItem Header="Update Proxy..." Click="UpdateProxy_Click" />
+                <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
+                <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />
+                <MenuItem x:Name="SampleImageColorsItem" Header="Sample 30 Image Colors" Click="SampleImageColors_Click" />
+            </MenuItem>
+        </Menu>
+
+        <Grid x:Name="RootSurface" Background="Black">
+            <Grid x:Name="PhotoSwitchingPage" Background="Black">
+                <Grid x:Name="PhotoViewport" Background="Black" ClipToBounds="True"
+                      MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"
+                      MouseLeftButtonUp="ImageViewport_MouseLeftButtonUp"
+                      MouseMove="ImageViewport_MouseMove"
+                      MouseWheel="ImageViewport_MouseWheel"
+                      MouseRightButtonUp="ImageViewport_MouseRightButtonUp">
+                    <Image x:Name="PhotoImage" Stretch="Uniform" RenderTransformOrigin="0.5,0.5"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Canvas x:Name="PhotoSampleColorsCanvas" IsHitTestVisible="False" />
+                    <TextBlock x:Name="PhotoEmptyText" Text="Set an image folder to begin"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="22" Opacity="0.75" />
+                </Grid>
+
+                <Border x:Name="TimerBadge" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="12" Padding="18,9" Background="#AA101010" CornerRadius="8">
+                    <TextBlock x:Name="TimerText" Text="00:00" FontSize="24" FontWeight="SemiBold"
+                               MouseLeftButtonUp="TimerText_MouseLeftButtonUp" />
+                </Border>
+
+                <Grid x:Name="CountdownOverlay" Background="#CC000000" Visibility="Collapsed">
+                    <TextBlock x:Name="CountdownText" Text="3" FontSize="180" FontWeight="Bold"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+            </Grid>
+
+            <Grid x:Name="ColorBlocksPage" Background="Black" Visibility="Collapsed"
+                  MouseRightButtonUp="ColorBlocksPage_MouseRightButtonUp"
+                  MouseWheel="ColorBlocksPage_MouseWheel">
+                <Canvas x:Name="ColorBlocksCanvas" Background="Black" SizeChanged="ColorBlocksCanvas_SizeChanged" />
+                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12"
+                        Padding="12,7" Background="#AA101010" CornerRadius="8">
+                    <TextBlock x:Name="ColorCountText" Text="Colors: 1" FontSize="13" />
+                </Border>
+            </Grid>
+
+            <Grid x:Name="ColorPhotoPage" Background="Black" Visibility="Collapsed">
+                <Grid x:Name="ColorPhotoViewport" Background="Black" ClipToBounds="True"
+                      MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"
+                      MouseLeftButtonUp="ImageViewport_MouseLeftButtonUp"
+                      MouseMove="ImageViewport_MouseMove"
+                      MouseWheel="ImageViewport_MouseWheel"
+                      MouseRightButtonUp="ImageViewport_MouseRightButtonUp">
+                    <Image x:Name="ColorPhotoImage" Stretch="Uniform" RenderTransformOrigin="0.5,0.5"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Canvas x:Name="ColorPhotoSampleColorsCanvas" IsHitTestVisible="False" />
+                    <TextBlock x:Name="ColorPhotoEmptyText" Text="Set an image folder to begin"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="22" Opacity="0.75" />
+                </Grid>
+            </Grid>
+
+            <Border x:Name="Toast" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="0,0,0,24" Padding="16,9" CornerRadius="8"
+                    Background="#DD202020" Visibility="Collapsed">
+                <TextBlock x:Name="ToastText" FontSize="13" />
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

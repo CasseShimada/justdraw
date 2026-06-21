@@ -1,0 +1,104 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve app version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $version = "0.0.0"
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Publish JustDraw.exe
+        run: >
+          dotnet publish src\JustDraw.Wpf\JustDraw.Wpf.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=false
+          -p:Version=${{ steps.version.outputs.value }}
+          -o dist
+
+      - name: Sign JustDraw.exe
+        shell: pwsh
+        env:
+          JUSTDRAW_REQUIRE_CODESIGN: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+          JUSTDRAW_CODESIGN_CERT_BASE64: ${{ secrets.JUSTDRAW_CODESIGN_CERT_BASE64 }}
+          JUSTDRAW_CODESIGN_CERT_PASSWORD: ${{ secrets.JUSTDRAW_CODESIGN_CERT_PASSWORD }}
+          JUSTDRAW_CODESIGN_TIMESTAMP_URL: ${{ vars.JUSTDRAW_CODESIGN_TIMESTAMP_URL }}
+        run: .\scripts\sign_windows_exe.ps1 -ExePath dist\JustDraw.exe
+
+      - name: Write SHA256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/JustDraw.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path dist/JustDraw.exe.sha256 -Value $hash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JustDraw-windows-exe
+          path: |
+            dist/JustDraw.exe
+            dist/JustDraw.exe.sha256
+          if-no-files-found: error
+
+      - name: Publish release assets
+        id: draft_release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/JustDraw.exe
+            dist/JustDraw.exe.sha256
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Publish drafted release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ contains(github.ref_name, '-') }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.id }}
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $isPrerelease = $env:IS_PRERELEASE -eq 'true'
+          $body = @{ draft = $false; prerelease = $isPrerelease } | ConvertTo-Json
+          Invoke-RestMethod `
+            -Method Patch `
+            -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" `
+            -Headers $headers `
+            -ContentType "application/json" `
+            -Body $body

@@ -1,0 +1,1752 @@
+using Microsoft.Win32;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Media;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
+using System.Windows.Threading;
+using Forms = System.Windows.Forms;
+using MediaColor = System.Windows.Media.Color;
+using MediaBrushes = System.Windows.Media.Brushes;
+using IoPath = System.IO.Path;
+using WpfImage = System.Windows.Controls.Image;
+using WpfPoint = System.Windows.Point;
+using WpfRectangle = System.Windows.Shapes.Rectangle;
+
+namespace JustDraw.Wpf;
+
+public partial class MainWindow : Window
+{
+    private readonly JustDrawState _state;
+    private readonly ImageLibrary _imageLibrary = new();
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.8) };
+    private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _startupUpdateTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly UpdateService _updateService = new();
+    private readonly VideoExportService _videoExportService = new();
+    private readonly VideoToolsInfo _videoTools = VideoExportService.FindTools();
+    private readonly Dictionary<AppMode, List<ImageEntry>> _entriesByMode = [];
+    private readonly Dictionary<AppMode, int> _currentIndexByMode = [];
+    private readonly Dictionary<AppMode, BitmapImage?> _sourceBitmapByMode = [];
+    private readonly Dictionary<AppMode, BitmapSource?> _displayBitmapByMode = [];
+    private readonly HashSet<AppMode> _loadedSources = [];
+    private readonly List<MediaColor> _palette = [];
+    private readonly List<MediaColor> _sampledImageColors = [];
+
+    private bool _grayscaleDisplayEnabled;
+    private bool _sampleImageColorsEnabled;
+    private bool _timerPaused = true;
+    private bool _timerExpiredHold;
+    private bool _updateBusy;
+    private bool _videoExportBusy;
+    private int _timerRemaining;
+    private int _overtimeSeconds;
+    private int _countdownRemaining;
+    private bool _isDraggingImage;
+    private WpfPoint _dragStart;
+    private double _dragStartOffsetX;
+    private double _dragStartOffsetY;
+
+    public MainWindow()
+    {
+        _state = StateStore.Load();
+        InitializeComponent();
+        ApplyIcon();
+        Width = _state.WindowWidth;
+        Height = _state.WindowHeight;
+        Topmost = _state.StayOnTop;
+        _timer.Tick += Timer_Tick;
+        _toastTimer.Tick += (_, _) => Toast.Visibility = Visibility.Collapsed;
+        _countdownTimer.Tick += CountdownTimer_Tick;
+        _startupUpdateTimer.Tick += StartupUpdateTimer_Tick;
+        _timerRemaining = ActiveModeState().TimerSeconds;
+        _grayscaleDisplayEnabled = _state.GrayscaleDisplayEnabled;
+        _sampleImageColorsEnabled = _state.SampleImageColorsEnabled;
+        GeneratePalette();
+        LoadSavedSources();
+        ApplyMode(_state.AppMode);
+        UpdateAllUi();
+        _startupUpdateTimer.Start();
+    }
+
+    private ModeState ActiveModeState() => _state.GetModeState(_state.AppMode);
+
+    private bool IsImageMode => _state.AppMode is AppMode.PhotoSwitching or AppMode.ColorPhoto;
+
+    private WpfImage ActiveImage => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoImage : PhotoImage;
+
+    private Grid ActiveViewport => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoViewport : PhotoViewport;
+
+    private Canvas ActiveSampleColorsCanvas => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoSampleColorsCanvas : PhotoSampleColorsCanvas;
+
+    private List<ImageEntry> ActiveEntries => _entriesByMode.TryGetValue(_state.AppMode, out var entries) ? entries : [];
+
+    private ImageEntry? ActiveEntry
+    {
+        get
+        {
+            var entries = ActiveEntries;
+            if (entries.Count == 0)
+            {
+                return null;
+            }
+
+            var index = Math.Clamp(CurrentIndex, 0, entries.Count - 1);
+            return entries[index];
+        }
+    }
+
+    private int CurrentIndex
+    {
+        get => _currentIndexByMode.TryGetValue(_state.AppMode, out var index) ? index : 0;
+        set => _currentIndexByMode[_state.AppMode] = value;
+    }
+
+    private bool IsChinese => _state.UiLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase);
+
+    private string T(string en, string zh) => IsChinese ? zh : en;
+
+    private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
+
+    private void ApplyIcon()
+    {
+        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "images", "icon.png");
+        if (!File.Exists(iconPath))
+        {
+            return;
+        }
+
+        try
+        {
+            Icon = new BitmapImage(new Uri(iconPath));
+        }
+        catch
+        {
+            // Icon is cosmetic.
+        }
+    }
+
+    private void LoadSavedSources()
+    {
+        LoadSourceForMode(AppMode.PhotoSwitching, showToast: false);
+        LoadSourceForMode(AppMode.ColorPhoto, showToast: false);
+    }
+
+    private void LoadSourceForMode(AppMode mode, bool showToast)
+    {
+        var modeState = _state.GetModeState(mode);
+        var source = modeState.ImageRootPath;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return;
+        }
+
+        var entries = _imageLibrary.Load(source);
+        RestoreOrder(modeState, entries);
+        _entriesByMode[mode] = entries;
+        _loadedSources.Add(mode);
+        RememberRecentPath(modeState, source);
+
+        var index = 0;
+        if (!string.IsNullOrWhiteSpace(modeState.LastImagePath))
+        {
+            var found = entries.FindIndex(e => string.Equals(e.Path, modeState.LastImagePath, StringComparison.OrdinalIgnoreCase));
+            if (found >= 0)
+            {
+                index = found;
+            }
+        }
+
+        _currentIndexByMode[mode] = index;
+        if (showToast)
+        {
+            ShowToast(entries.Count == 0 ? T("No images found", "没有找到图片") : T("Loaded ", "已载入 ") + entries.Count + T(" images", " 张图片"));
+        }
+    }
+
+    private static void RememberRecentPath(ModeState modeState, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        modeState.RecentPaths.RemoveAll(item => item.Equals(path, StringComparison.OrdinalIgnoreCase));
+        modeState.RecentPaths.Insert(0, path);
+        if (modeState.RecentPaths.Count > 10)
+        {
+            modeState.RecentPaths.RemoveRange(10, modeState.RecentPaths.Count - 10);
+        }
+    }
+
+    private void RebuildRecentPathsMenu()
+    {
+        RecentPathsMenu.Items.Clear();
+        var recent = ActiveModeState().RecentPaths.Where(path => Directory.Exists(path) || File.Exists(path)).Take(10).ToList();
+        if (recent.Count == 0)
+        {
+            RecentPathsMenu.Items.Add(new MenuItem { Header = T("No Recent Paths", "暂无最近路径"), IsEnabled = false });
+            return;
+        }
+
+        foreach (var path in recent)
+        {
+            var item = new MenuItem { Header = path };
+            item.Click += (_, _) => OpenImageSource(path);
+            RecentPathsMenu.Items.Add(item);
+        }
+    }
+
+    private static void RestoreOrder(ModeState modeState, List<ImageEntry> entries)
+    {
+        if (entries.Count == 0 || modeState.ImageOrder.Count == 0)
+        {
+            return;
+        }
+
+        var lookup = entries.ToDictionary(e => e.Path, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<ImageEntry>();
+        foreach (var savedPath in modeState.ImageOrder)
+        {
+            if (lookup.Remove(savedPath, out var entry))
+            {
+                ordered.Add(entry);
+            }
+        }
+
+        ordered.AddRange(lookup.Values.OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase));
+        entries.Clear();
+        entries.AddRange(ordered);
+    }
+
+    private void ApplyMode(AppMode mode)
+    {
+        SaveCurrentImageViewState();
+        _state.AppMode = mode;
+        PhotoSwitchingPage.Visibility = mode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
+        ColorBlocksPage.Visibility = mode == AppMode.ColorBlocks ? Visibility.Visible : Visibility.Collapsed;
+        ColorPhotoPage.Visibility = mode == AppMode.ColorPhoto ? Visibility.Visible : Visibility.Collapsed;
+        FileMenu.Visibility = IsImageMode ? Visibility.Visible : Visibility.Collapsed;
+        TimerMenu.Visibility = mode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
+        ColorToolsMenu.Visibility = mode == AppMode.ColorBlocks ? Visibility.Visible : Visibility.Collapsed;
+        MosaicMenu.Visibility = IsImageMode ? Visibility.Visible : Visibility.Collapsed;
+        _timerRemaining = ActiveModeState().TimerSeconds;
+        _timerExpiredHold = false;
+        _overtimeSeconds = 0;
+        _timerPaused = mode != AppMode.PhotoSwitching || _timerPaused;
+
+        if (IsImageMode && !_loadedSources.Contains(mode))
+        {
+            LoadSourceForMode(mode, showToast: false);
+        }
+
+        RefreshActiveView();
+        UpdateAllUi();
+    }
+
+    private void RefreshActiveView()
+    {
+        if (_state.AppMode == AppMode.ColorBlocks)
+        {
+            ClearSampledImageColors();
+            RenderColorBlocks();
+            return;
+        }
+
+        LoadCurrentImage();
+    }
+
+    private void OpenImageSource(string sourcePath)
+    {
+        var modeState = ActiveModeState();
+        modeState.ImageRootPath = sourcePath;
+        modeState.ImageOrder.Clear();
+        _loadedSources.Remove(_state.AppMode);
+        LoadSourceForMode(_state.AppMode, showToast: true);
+        CurrentIndex = 0;
+        RefreshActiveView();
+        UpdateAllUi();
+    }
+
+    private void LoadCurrentImage()
+    {
+        var entry = ActiveEntry;
+        if (entry is null)
+        {
+            ActiveImage.Source = null;
+            PhotoEmptyText.Visibility = _state.AppMode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
+            ColorPhotoEmptyText.Visibility = _state.AppMode == AppMode.ColorPhoto ? Visibility.Visible : Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(entry.Path);
+            bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            _sourceBitmapByMode[_state.AppMode] = bitmap;
+            ActiveModeState().LastImagePath = entry.Path;
+            ApplyImageEffects();
+            ApplyImageViewState();
+            ResampleImageColorsIfEnabled();
+            PhotoEmptyText.Visibility = Visibility.Collapsed;
+            ColorPhotoEmptyText.Visibility = Visibility.Collapsed;
+        }
+        catch
+        {
+            ShowToast("Cannot open image");
+        }
+    }
+
+    private void ApplyImageEffects()
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        if (!_sourceBitmapByMode.TryGetValue(_state.AppMode, out var bitmap) || bitmap is null)
+        {
+            return;
+        }
+
+        BitmapSource source = bitmap;
+        if (ActiveModeState().MosaicEnabled)
+        {
+            source = CreateMosaic(source, _state.MosaicDownsampleFactor);
+        }
+
+        if (_grayscaleDisplayEnabled)
+        {
+            source = CreateGrayscale(source);
+        }
+
+        _displayBitmapByMode[_state.AppMode] = source;
+        ActiveImage.Source = source;
+        RenderSampledImageColors();
+    }
+
+    private static BitmapSource CreateGrayscale(BitmapSource source)
+    {
+        var converted = new FormatConvertedBitmap(source, PixelFormats.Gray8, null, 0);
+        converted.Freeze();
+        return converted;
+    }
+
+    private static BitmapSource CreateMosaic(BitmapSource source, int factor)
+    {
+        factor = Math.Clamp(factor, 4, 64);
+        var smallWidth = Math.Max(8, source.PixelWidth / factor);
+        var smallHeight = Math.Max(8, source.PixelHeight / factor);
+        var downsampled = new TransformedBitmap(source, new ScaleTransform((double)smallWidth / source.PixelWidth, (double)smallHeight / source.PixelHeight));
+        downsampled.Freeze();
+        var upsampled = new TransformedBitmap(downsampled, new ScaleTransform((double)source.PixelWidth / smallWidth, (double)source.PixelHeight / smallHeight));
+        upsampled.Freeze();
+        return upsampled;
+    }
+
+    private void ApplyImageViewState()
+    {
+        var state = GetCurrentImageViewState();
+        var transformGroup = new TransformGroup();
+        transformGroup.Children.Add(new ScaleTransform(
+            (_state.FlipHorizontal ? -1 : 1) * state.Scale,
+            (_state.FlipVertical ? -1 : 1) * state.Scale));
+        transformGroup.Children.Add(new RotateTransform(state.Rotation));
+        transformGroup.Children.Add(new TranslateTransform(state.OffsetX, state.OffsetY));
+        ActiveImage.RenderTransform = transformGroup;
+    }
+
+    private ImageViewState GetCurrentImageViewState()
+    {
+        var entry = ActiveEntry;
+        if (entry is null)
+        {
+            return new ImageViewState();
+        }
+
+        var modeState = ActiveModeState();
+        if (!modeState.ImageViewStates.TryGetValue(entry.Path, out var state))
+        {
+            state = new ImageViewState();
+            modeState.ImageViewStates[entry.Path] = state;
+        }
+
+        return state;
+    }
+
+    private void SaveCurrentImageViewState()
+    {
+        if (!IsImageMode || ActiveEntry is null)
+        {
+            return;
+        }
+
+        var state = GetCurrentImageViewState();
+        if (ActiveImage.RenderTransform is not TransformGroup group)
+        {
+            return;
+        }
+
+        foreach (var transform in group.Children)
+        {
+            switch (transform)
+            {
+                case ScaleTransform scale:
+                    state.Scale = Math.Max(0.05, Math.Abs(scale.ScaleX));
+                    break;
+                case TranslateTransform translate:
+                    state.OffsetX = translate.X;
+                    state.OffsetY = translate.Y;
+                    break;
+                case RotateTransform rotate:
+                    state.Rotation = NormalizeRotation((int)Math.Round(rotate.Angle));
+                    break;
+            }
+        }
+    }
+
+    private static int NormalizeRotation(int value)
+    {
+        value %= 360;
+        if (value < 0)
+        {
+            value += 360;
+        }
+
+        return value - value % 90;
+    }
+
+    private void Navigate(int delta)
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        var entries = ActiveEntries;
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        SaveCurrentImageViewState();
+        if (ActiveModeState().RandomPlayMode && Math.Abs(delta) == 1)
+        {
+            CurrentIndex = Random.Shared.Next(entries.Count);
+        }
+        else
+        {
+            CurrentIndex = (CurrentIndex + delta + entries.Count) % entries.Count;
+        }
+
+        _timerRemaining = ActiveModeState().TimerSeconds;
+        _timerExpiredHold = false;
+        _overtimeSeconds = 0;
+        LoadCurrentImage();
+        UpdateTimerText();
+    }
+
+    private void NavigateSameFolder(int delta)
+    {
+        if (!IsImageMode || ActiveEntry is null || ActiveEntry.IsFromArchive)
+        {
+            Navigate(delta);
+            return;
+        }
+
+        var folder = IoPath.GetDirectoryName(ActiveEntry.Path) ?? "";
+        var entries = ActiveEntries;
+        if (entries.Count == 0 || folder.Length == 0)
+        {
+            return;
+        }
+
+        var direction = delta >= 0 ? 1 : -1;
+        var index = CurrentIndex;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            index = (index + direction + entries.Count) % entries.Count;
+            var candidate = entries[index];
+            if (!candidate.IsFromArchive && string.Equals(IoPath.GetDirectoryName(candidate.Path), folder, StringComparison.OrdinalIgnoreCase))
+            {
+                SaveCurrentImageViewState();
+                CurrentIndex = index;
+                _timerRemaining = ActiveModeState().TimerSeconds;
+                _timerExpiredHold = false;
+                _overtimeSeconds = 0;
+                LoadCurrentImage();
+                UpdateTimerText();
+                return;
+            }
+        }
+    }
+
+    private void GeneratePalette()
+    {
+        _palette.Clear();
+        _palette.AddRange(ColorTools.GeneratePalette(
+            _state.ColorBlocksStripeCount,
+            _state.ColorBlocksMinLuma,
+            _state.ColorBlocksMaxLuma,
+            _state.ColorBlocksMinSaturation));
+        RenderColorBlocks();
+    }
+
+    private static BitmapSource CreateColorStripeBitmap(IReadOnlyList<MediaColor> colors)
+    {
+        var count = Math.Max(1, colors.Count);
+        var width = Math.Max(96, count * 96);
+        const int height = 96;
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var left = i * width / (double)count;
+                var right = (i + 1) * width / (double)count;
+                dc.DrawRectangle(new SolidColorBrush(colors[i]), null, new Rect(left, 0, right - left, height));
+            }
+        }
+
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private void RenderColorBlocks()
+    {
+        if (ColorBlocksCanvas is null)
+        {
+            return;
+        }
+
+        ColorBlocksCanvas.Children.Clear();
+        var width = Math.Max(1, ColorBlocksCanvas.ActualWidth);
+        var height = Math.Max(1, ColorBlocksCanvas.ActualHeight);
+        var count = Math.Max(1, _palette.Count);
+        ColorCountText.Text = "Colors: " + count;
+
+        if (!_state.ColorBlocksShapeModeEnabled)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var color = _grayscaleDisplayEnabled ? ColorTools.ToGrayscale(_palette[i]) : _palette[i];
+                var left = Math.Floor(i * width / count);
+                var right = Math.Floor((i + 1) * width / count);
+                var rectangle = new WpfRectangle
+                {
+                    Width = Math.Max(1, right - left),
+                    Height = height,
+                    Fill = new SolidColorBrush(color)
+                };
+                Canvas.SetLeft(rectangle, left);
+                Canvas.SetTop(rectangle, 0);
+                ColorBlocksCanvas.Children.Add(rectangle);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < 28; i++)
+        {
+            var color = _grayscaleDisplayEnabled ? ColorTools.ToGrayscale(_palette[i % count]) : _palette[i % count];
+            var ellipse = new Ellipse
+            {
+                Width = Random.Shared.NextDouble() * width * 0.35 + width * 0.08,
+                Height = Random.Shared.NextDouble() * height * 0.28 + height * 0.08,
+                Fill = new SolidColorBrush(color),
+                Opacity = 0.96
+            };
+            Canvas.SetLeft(ellipse, Random.Shared.NextDouble() * Math.Max(1, width - ellipse.Width));
+            Canvas.SetTop(ellipse, Random.Shared.NextDouble() * Math.Max(1, height - ellipse.Height));
+            ColorBlocksCanvas.Children.Add(ellipse);
+        }
+    }
+
+    private void ResampleImageColorsIfEnabled()
+    {
+        if (!_sampleImageColorsEnabled)
+        {
+            ClearSampledImageColors();
+            return;
+        }
+
+        SampleCurrentImageColors();
+    }
+
+    private void SampleCurrentImageColors()
+    {
+        _sampledImageColors.Clear();
+        if (!IsImageMode || !_sourceBitmapByMode.TryGetValue(_state.AppMode, out var bitmap) || bitmap is null)
+        {
+            ClearSampledImageColors();
+            return;
+        }
+
+        BitmapSource source = bitmap.Format == PixelFormats.Bgra32
+            ? bitmap
+            : new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+        var width = source.PixelWidth;
+        var height = source.PixelHeight;
+        if (width <= 0 || height <= 0)
+        {
+            ClearSampledImageColors();
+            return;
+        }
+
+        const int sampleCount = 30;
+        var pixels = new byte[4];
+        for (var i = 0; i < sampleCount; i++)
+        {
+            var x = Random.Shared.Next(width);
+            var y = Random.Shared.Next(height);
+            source.CopyPixels(new Int32Rect(x, y, 1, 1), pixels, 4, 0);
+            var color = MediaColor.FromArgb(pixels[3], pixels[2], pixels[1], pixels[0]);
+            _sampledImageColors.Add(color);
+        }
+
+        RenderSampledImageColors();
+        ShowToast("Sampled 30 image colors");
+    }
+
+    private void RenderSampledImageColors()
+    {
+        PhotoSampleColorsCanvas.Children.Clear();
+        ColorPhotoSampleColorsCanvas.Children.Clear();
+        if (!_sampleImageColorsEnabled || !IsImageMode || _sampledImageColors.Count == 0)
+        {
+            return;
+        }
+
+        var canvas = ActiveSampleColorsCanvas;
+        var width = Math.Max(1, canvas.ActualWidth);
+        var height = Math.Max(1, canvas.ActualHeight);
+        if (width <= 1 || height <= 1)
+        {
+            return;
+        }
+
+        var blockSize = Math.Clamp(Math.Min(width, height) * 0.085, 28, 72);
+        var maxLeft = Math.Max(0, width - blockSize);
+        var maxTop = Math.Max(0, height - blockSize);
+        var shuffled = _sampledImageColors.OrderBy(_ => Random.Shared.Next()).ToList();
+
+        foreach (var rawColor in shuffled)
+        {
+            var color = _grayscaleDisplayEnabled ? ColorTools.ToGrayscale(rawColor) : rawColor;
+            var border = new Border
+            {
+                Width = blockSize,
+                Height = blockSize,
+                Background = new SolidColorBrush(color),
+                BorderBrush = new SolidColorBrush(MediaColor.FromArgb(220, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Opacity = 0.94,
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 10,
+                    ShadowDepth = 2,
+                    Opacity = 0.35
+                }
+            };
+            Canvas.SetLeft(border, Random.Shared.NextDouble() * maxLeft);
+            Canvas.SetTop(border, Random.Shared.NextDouble() * maxTop);
+            canvas.Children.Add(border);
+        }
+    }
+
+    private void NotifyTimerFinished()
+    {
+        if (!_state.TimerFinishNotificationEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            SystemSounds.Exclamation.Play();
+        }
+        catch
+        {
+            // Notification sounds are optional.
+        }
+
+        ShowToast(T("Timer finished", "计时结束"));
+    }
+
+    private void ClearSampledImageColors()
+    {
+        _sampledImageColors.Clear();
+        PhotoSampleColorsCanvas.Children.Clear();
+        ColorPhotoSampleColorsCanvas.Children.Clear();
+    }
+
+    private void UpdateAllUi()
+    {
+        ApplyLanguage();
+        RebuildRecentPathsMenu();
+        PhotoSwitchingModeItem.IsChecked = _state.AppMode == AppMode.PhotoSwitching;
+        ColorBlocksModeItem.IsChecked = _state.AppMode == AppMode.ColorBlocks;
+        ColorPhotoModeItem.IsChecked = _state.AppMode == AppMode.ColorPhoto;
+        RandomPlayItem.IsChecked = ActiveModeState().RandomPlayMode;
+        PrestartCountdownItem.IsChecked = ActiveModeState().PrestartCountdownEnabled;
+        TimerNotificationItem.IsChecked = _state.TimerFinishNotificationEnabled;
+        ShapeModeItem.IsChecked = _state.ColorBlocksShapeModeEnabled;
+        MosaicEnabledItem.IsChecked = IsImageMode && ActiveModeState().MosaicEnabled;
+        StayOnTopItem.IsChecked = _state.StayOnTop;
+        LockAspectItem.IsChecked = _state.LockImageViewportAspectRatio;
+        GrayscaleItem.IsChecked = _grayscaleDisplayEnabled;
+        SampleImageColorsItem.IsChecked = _sampleImageColorsEnabled;
+        SampleImageColorsItem.IsEnabled = IsImageMode;
+        EnglishLanguageItem.IsChecked = !IsChinese;
+        ChineseLanguageItem.IsChecked = IsChinese;
+        ProtectedVideoExportItem.IsEnabled = _videoTools.Available && !_videoExportBusy;
+        TimerAutoNextItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.AutoNext;
+        TimerHoldItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.Hold;
+        TimerOvertimeItem.IsChecked = ActiveModeState().TimerEndMode == TimerEndMode.Overtime;
+        PauseTimerItem.Header = _timerPaused ? T("Resume Timer", "继续计时") : T("Pause Timer", "暂停计时");
+        Topmost = _state.StayOnTop;
+        TopMenu.Visibility = _state.StayOnTop ? Visibility.Collapsed : Visibility.Visible;
+        UpdateTimerText();
+    }
+
+    private void ApplyLanguage()
+    {
+        Title = T("Just Draw!", "Just Draw!");
+        PhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
+        ColorPhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
+        ColorCountText.Text = T("Colors: ", "颜色数：") + Math.Max(1, _palette.Count);
+    }
+
+    private void UpdateTimerText()
+    {
+        if (_timerExpiredHold && ActiveModeState().TimerEndMode == TimerEndMode.Overtime)
+        {
+            TimerText.Text = "+" + FormatTime(_overtimeSeconds);
+            TimerText.Foreground = MediaBrushes.Red;
+            return;
+        }
+
+        TimerText.Text = FormatTime(Math.Max(0, _timerRemaining));
+        TimerText.Foreground = _timerPaused ? MediaBrushes.Gold : (_timerRemaining <= 5 ? MediaBrushes.Red : MediaBrushes.White);
+    }
+
+    private static string FormatTime(int seconds)
+    {
+        return $"{seconds / 60:00}:{seconds % 60:00}";
+    }
+
+    private void Timer_Tick(object? sender, EventArgs e)
+    {
+        if (_timerPaused || _state.AppMode != AppMode.PhotoSwitching)
+        {
+            return;
+        }
+
+        if (_timerExpiredHold)
+        {
+            if (ActiveModeState().TimerEndMode == TimerEndMode.Overtime)
+            {
+                _overtimeSeconds++;
+            }
+
+            UpdateTimerText();
+            return;
+        }
+
+        _timerRemaining--;
+        if (_timerRemaining <= 0)
+        {
+            switch (ActiveModeState().TimerEndMode)
+            {
+                case TimerEndMode.AutoNext:
+                    NotifyTimerFinished();
+                    Navigate(1);
+                    break;
+                case TimerEndMode.Hold:
+                    NotifyTimerFinished();
+                    _timerRemaining = 0;
+                    _timerExpiredHold = true;
+                    _timerPaused = true;
+                    break;
+                case TimerEndMode.Overtime:
+                    NotifyTimerFinished();
+                    _timerRemaining = 0;
+                    _timerExpiredHold = true;
+                    _overtimeSeconds = 0;
+                    break;
+            }
+        }
+
+        UpdateTimerText();
+    }
+
+    private void ToggleTimer()
+    {
+        if (_state.AppMode != AppMode.PhotoSwitching)
+        {
+            return;
+        }
+
+        if (_timerPaused && ActiveModeState().PrestartCountdownEnabled)
+        {
+            StartCountdown();
+            return;
+        }
+
+        _timerPaused = !_timerPaused;
+        if (!_timerPaused)
+        {
+            _timer.Start();
+        }
+
+        UpdateAllUi();
+    }
+
+    private void StartCountdown()
+    {
+        _countdownRemaining = 3;
+        CountdownText.Text = _countdownRemaining.ToString();
+        CountdownOverlay.Visibility = Visibility.Visible;
+        _countdownTimer.Start();
+    }
+
+    private void CountdownTimer_Tick(object? sender, EventArgs e)
+    {
+        _countdownRemaining--;
+        if (_countdownRemaining <= 0)
+        {
+            _countdownTimer.Stop();
+            CountdownOverlay.Visibility = Visibility.Collapsed;
+            _timerPaused = false;
+            _timer.Start();
+            UpdateAllUi();
+            return;
+        }
+
+        CountdownText.Text = _countdownRemaining.ToString();
+    }
+
+    private void ShowToast(string message)
+    {
+        ToastText.Text = message;
+        Toast.Visibility = Visibility.Visible;
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private async void StartupUpdateTimer_Tick(object? sender, EventArgs e)
+    {
+        _startupUpdateTimer.Stop();
+        if (!OperatingSystem.IsWindows() || Environment.ProcessPath is null || !Environment.ProcessPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (_updateBusy)
+        {
+            if (manual)
+            {
+                ShowToast(T("Update check is already running", "更新检查正在进行"));
+            }
+
+            return;
+        }
+
+        try
+        {
+            _updateBusy = true;
+            if (manual)
+            {
+                ShowToast(T("Checking GitHub for updates...", "正在检查 GitHub 更新..."));
+            }
+
+            var release = await _updateService.FetchLatestReleaseAsync(_state.UpdateProxyUrl);
+            if (!UpdateService.IsNewerVersion(release.Version, UpdateService.AppVersion))
+            {
+                if (manual)
+                {
+                    ShowToast(T("JustDraw is up to date", "JustDraw 已是最新版本"));
+                }
+
+                return;
+            }
+
+            var result = System.Windows.MessageBox.Show(
+                T($"A new JustDraw version is available: {release.Version}\n\nDownload and restart JustDraw?\n\n{release.HtmlUrl}",
+                    $"发现 JustDraw 新版本：{release.Version}\n\n是否下载并重启 JustDraw？\n\n{release.HtmlUrl}"),
+                T("JustDraw Update", "JustDraw 更新"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (result != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(Environment.ProcessPath) || !Environment.ProcessPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                System.Windows.MessageBox.Show(
+                    T($"Automatic replacement is only available in the packaged Windows app.\n\n{release.HtmlUrl}",
+                        $"自动替换仅支持打包后的 Windows 应用。\n\n{release.HtmlUrl}"),
+                    T("JustDraw Update", "JustDraw 更新"));
+                return;
+            }
+
+            ShowToast(T("Downloading JustDraw update...", "正在下载 JustDraw 更新..."));
+            var downloaded = await _updateService.DownloadReleaseExeAsync(release, _state.UpdateProxyUrl);
+            var script = _updateService.CreateUpdateScript(downloaded);
+            UpdateService.LaunchUpdateScript(script);
+            Close();
+        }
+        catch (Exception ex)
+        {
+            if (manual)
+            {
+                ShowToast(T("Update failed: ", "更新失败：") + ex.Message);
+            }
+        }
+        finally
+        {
+            _updateBusy = false;
+        }
+    }
+
+    private async Task ShowProtectedVideoExportDialogAsync()
+    {
+        var state = _state.ProtectedVideoExport;
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = T("Protected Video Export", "受保护视频导出"),
+            Width = 640,
+            Height = 560,
+            MinWidth = 520,
+            MinHeight = 460,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Topmost = _state.StayOnTop,
+            Background = new SolidColorBrush(MediaColor.FromRgb(32, 32, 32))
+        };
+
+        var root = new DockPanel { Margin = new Thickness(14) };
+        var list = new System.Windows.Controls.ListBox
+        {
+            AllowDrop = true,
+            MinHeight = 150,
+            Background = new SolidColorBrush(MediaColor.FromRgb(18, 18, 18)),
+            Foreground = MediaBrushes.White
+        };
+        foreach (var path in state.InputPaths.Where(File.Exists))
+        {
+            list.Items.Add(path);
+        }
+
+        list.Drop += (_, e) =>
+        {
+            if (!e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+            {
+                return;
+            }
+
+            foreach (var path in ((string[])e.Data.GetData(System.Windows.DataFormats.FileDrop)!).Where(IsVideoPath))
+            {
+                if (!list.Items.Contains(path))
+                {
+                    list.Items.Add(path);
+                }
+            }
+        };
+
+        var form = new Grid();
+        form.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        form.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var i = 0; i < 6; i++)
+        {
+            form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        }
+
+        var duration = new System.Windows.Controls.TextBox { Text = Math.Max(1, state.DurationSeconds).ToString(CultureInfo.InvariantCulture), Margin = new Thickness(0, 4, 0, 4) };
+        var watermarkText = new System.Windows.Controls.TextBox { Text = state.WatermarkText, Margin = new Thickness(0, 4, 0, 4) };
+        var watermarkPath = new System.Windows.Controls.TextBox { Text = state.WatermarkPath, Margin = new Thickness(0, 4, 0, 4) };
+        var format = new System.Windows.Controls.ComboBox { ItemsSource = new[] { "mp4", "gif" }, SelectedItem = state.OutputFormat == "gif" ? "gif" : "mp4", Margin = new Thickness(0, 4, 0, 4) };
+        var overlay = new System.Windows.Controls.ComboBox { ItemsSource = new[] { "noise", "off" }, SelectedItem = state.OverlayMode == "off" ? "off" : "noise", Margin = new Thickness(0, 4, 0, 4) };
+        var deleteOriginal = new System.Windows.Controls.CheckBox { Content = T("Delete original after successful export", "导出成功后删除原视频"), IsChecked = state.DeleteOriginalAfterExport, Foreground = MediaBrushes.White, Margin = new Thickness(0, 6, 0, 6) };
+        AddFormRow(form, 0, T("Target seconds", "目标秒数"), duration);
+        AddFormRow(form, 1, T("Watermark text", "水印文字"), watermarkText);
+        AddFormRow(form, 2, T("Watermark image", "水印图片"), watermarkPath);
+        AddFormRow(form, 3, T("Output format", "输出格式"), format);
+        AddFormRow(form, 4, T("Overlay", "叠加层"), overlay);
+        Grid.SetColumn(deleteOriginal, 1);
+        Grid.SetRow(deleteOriginal, 5);
+        form.Children.Add(deleteOriginal);
+
+        var buttons = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var addButton = new System.Windows.Controls.Button { Content = T("Add Videos...", "添加视频..."), Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 5, 12, 5) };
+        var removeButton = new System.Windows.Controls.Button { Content = T("Remove Selected", "移除选中"), Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 5, 12, 5) };
+        var watermarkButton = new System.Windows.Controls.Button { Content = T("Browse Watermark...", "选择水印..."), Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 5, 12, 5) };
+        var exportButton = new System.Windows.Controls.Button { Content = T("Export", "导出"), Padding = new Thickness(16, 5, 16, 5) };
+        buttons.Children.Add(addButton);
+        buttons.Children.Add(removeButton);
+        buttons.Children.Add(watermarkButton);
+        buttons.Children.Add(exportButton);
+
+        var status = new TextBlock { Foreground = MediaBrushes.White, Margin = new Thickness(0, 10, 0, 0), Text = _videoTools.Available ? T("Ready", "准备就绪") : _videoTools.MissingReason };
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(status, Dock.Bottom);
+        DockPanel.SetDock(form, Dock.Bottom);
+        root.Children.Add(buttons);
+        root.Children.Add(status);
+        root.Children.Add(form);
+        root.Children.Add(list);
+        dialog.Content = root;
+
+        addButton.Click += (_, _) =>
+        {
+            var picker = new Microsoft.Win32.OpenFileDialog
+            {
+                Multiselect = true,
+                Filter = "Video Files (*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.ts;*.mts;*.m2ts)|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.ts;*.mts;*.m2ts|All Files (*.*)|*.*"
+            };
+            if (picker.ShowDialog(dialog) == true)
+            {
+                foreach (var path in picker.FileNames.Where(IsVideoPath))
+                {
+                    if (!list.Items.Contains(path))
+                    {
+                        list.Items.Add(path);
+                    }
+                }
+            }
+        };
+        removeButton.Click += (_, _) =>
+        {
+            foreach (var item in list.SelectedItems.Cast<object>().ToArray())
+            {
+                list.Items.Remove(item);
+            }
+        };
+        watermarkButton.Click += (_, _) =>
+        {
+            var picker = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|All Files (*.*)|*.*"
+            };
+            if (picker.ShowDialog(dialog) == true)
+            {
+                watermarkPath.Text = picker.FileName;
+            }
+        };
+        exportButton.Click += async (_, _) =>
+        {
+            if (_videoExportBusy)
+            {
+                return;
+            }
+
+            var paths = list.Items.Cast<string>().Where(File.Exists).ToList();
+            if (paths.Count == 0)
+            {
+                status.Text = T("Add at least one video", "请至少添加一个视频");
+                return;
+            }
+
+            if (!int.TryParse(duration.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) || seconds <= 0)
+            {
+                status.Text = T("Target seconds must be positive", "目标秒数必须大于 0");
+                return;
+            }
+
+            state.InputPaths = paths;
+            state.DurationSeconds = seconds;
+            state.WatermarkText = watermarkText.Text;
+            state.WatermarkPath = watermarkPath.Text;
+            state.OutputFormat = (format.SelectedItem as string) ?? "mp4";
+            state.OverlayMode = (overlay.SelectedItem as string) ?? "noise";
+            state.DeleteOriginalAfterExport = deleteOriginal.IsChecked == true;
+            _videoExportBusy = true;
+            exportButton.IsEnabled = false;
+            try
+            {
+                var exported = new List<string>();
+                for (var i = 0; i < paths.Count; i++)
+                {
+                    var input = paths[i];
+                    var progress = new Progress<(int Percent, string Stage, string Detail)>(value =>
+                    {
+                        status.Text = $"{i + 1}/{paths.Count} {value.Percent}% - {value.Stage}: {value.Detail}";
+                    });
+                    var result = await _videoExportService.ExportProtectedShortVideoAsync(
+                        _videoTools,
+                        new VideoExportOptions(input, "", seconds, state.OutputFormat, state.WatermarkPath, state.WatermarkText, state.OverlayMode, state.DeleteOriginalAfterExport),
+                        progress);
+                    exported.Add(result.OutputPath);
+                }
+
+                status.Text = paths.Count == 1
+                    ? T("Protected video exported: ", "受保护视频已导出：") + IoPath.GetFileName(exported[0])
+                    : T("Protected video export complete: ", "受保护视频导出完成：") + exported.Count;
+                ShowToast(status.Text);
+            }
+            catch (Exception ex)
+            {
+                status.Text = T("Protected video export failed: ", "受保护视频导出失败：") + ex.Message;
+                ShowToast(status.Text);
+            }
+            finally
+            {
+                _videoExportBusy = false;
+                exportButton.IsEnabled = true;
+                UpdateAllUi();
+            }
+        };
+
+        dialog.Closed += (_, _) =>
+        {
+            state.InputPaths = list.Items.Cast<string>().ToList();
+            state.WatermarkText = watermarkText.Text;
+            state.WatermarkPath = watermarkPath.Text;
+            state.OutputFormat = (format.SelectedItem as string) ?? "mp4";
+            state.OverlayMode = (overlay.SelectedItem as string) ?? "noise";
+            state.DeleteOriginalAfterExport = deleteOriginal.IsChecked == true;
+            if (int.TryParse(duration.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
+            {
+                state.DurationSeconds = seconds;
+            }
+        };
+
+        dialog.Show();
+        await Task.CompletedTask;
+    }
+
+    private static void AddFormRow(Grid form, int row, string label, System.Windows.Controls.Control control)
+    {
+        var text = new TextBlock { Text = label, Foreground = MediaBrushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 12, 4) };
+        Grid.SetRow(text, row);
+        Grid.SetColumn(text, 0);
+        Grid.SetRow(control, row);
+        Grid.SetColumn(control, 1);
+        form.Children.Add(text);
+        form.Children.Add(control);
+    }
+
+    private static bool IsVideoPath(string path)
+    {
+        return File.Exists(path) && VideoExportService.VideoExtensions.Contains(IoPath.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void SetImageFolder_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new Forms.FolderBrowserDialog
+        {
+            Description = "Select image folder",
+            UseDescriptionForTitle = true
+        };
+
+        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        OpenImageSource(dialog.SelectedPath);
+    }
+
+    private void DeletePathPlaybackState_Click(object sender, RoutedEventArgs e)
+    {
+        var modeState = ActiveModeState();
+        var path = modeState.ImageRootPath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            ShowToast(T("No active image path", "当前没有图片路径"));
+            return;
+        }
+
+        modeState.LastImagePath = "";
+        modeState.ImageOrder.Clear();
+        modeState.ImageViewStates.Clear();
+        _entriesByMode.Remove(_state.AppMode);
+        _currentIndexByMode[_state.AppMode] = 0;
+        _loadedSources.Remove(_state.AppMode);
+        LoadSourceForMode(_state.AppMode, showToast: false);
+        RefreshActiveView();
+        ShowToast(T("Path playback state deleted", "已删除当前路径播放状态"));
+    }
+
+    private void RefreshRandom_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        var entries = ActiveEntries;
+        for (var i = entries.Count - 1; i > 0; i--)
+        {
+            var j = Random.Shared.Next(i + 1);
+            (entries[i], entries[j]) = (entries[j], entries[i]);
+        }
+
+        ActiveModeState().ImageOrder = entries.Select(e => e.Path).ToList();
+        CurrentIndex = entries.Count == 0 ? 0 : Random.Shared.Next(entries.Count);
+        LoadCurrentImage();
+        ShowToast("Random image");
+    }
+
+    private void ResetImageView_Click(object sender, RoutedEventArgs e)
+    {
+        if (ActiveEntry is null)
+        {
+            return;
+        }
+
+        ActiveModeState().ImageViewStates[ActiveEntry.Path] = new ImageViewState();
+        ApplyImageViewState();
+        ShowToast(T("Current image state reset", "已重置当前图片状态"));
+    }
+
+    private void ResetCurrentPathImageStates_Click(object sender, RoutedEventArgs e)
+    {
+        ActiveModeState().ImageViewStates.Clear();
+        ApplyImageViewState();
+        ShowToast(T("Current path image states reset", "已重置当前路径图片状态"));
+    }
+
+    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void PhotoSwitchingMode_Click(object sender, RoutedEventArgs e) => ApplyMode(AppMode.PhotoSwitching);
+
+    private void ColorBlocksMode_Click(object sender, RoutedEventArgs e) => ApplyMode(AppMode.ColorBlocks);
+
+    private void ColorPhotoMode_Click(object sender, RoutedEventArgs e) => ApplyMode(AppMode.ColorPhoto);
+
+    private void PauseTimer_Click(object sender, RoutedEventArgs e) => ToggleTimer();
+
+    private void SetTimer_Click(object sender, RoutedEventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox("Set seconds", "Timer", ActiveModeState().TimerSeconds.ToString());
+        if (!int.TryParse(input, out var seconds) || seconds <= 0)
+        {
+            return;
+        }
+
+        ActiveModeState().TimerSeconds = seconds;
+        _timerRemaining = seconds;
+        _timerExpiredHold = false;
+        _overtimeSeconds = 0;
+        UpdateAllUi();
+    }
+
+    private void ResetTimer_Click(object sender, RoutedEventArgs e)
+    {
+        _timerRemaining = ActiveModeState().TimerSeconds;
+        _timerExpiredHold = false;
+        _overtimeSeconds = 0;
+        UpdateAllUi();
+    }
+
+    private void RandomPlay_Click(object sender, RoutedEventArgs e)
+    {
+        ActiveModeState().RandomPlayMode = !ActiveModeState().RandomPlayMode;
+        ShowToast(ActiveModeState().RandomPlayMode ? "Random mode enabled" : "Sequence mode enabled");
+        UpdateAllUi();
+    }
+
+    private void PrestartCountdown_Click(object sender, RoutedEventArgs e)
+    {
+        ActiveModeState().PrestartCountdownEnabled = !ActiveModeState().PrestartCountdownEnabled;
+        UpdateAllUi();
+    }
+
+    private void TimerNotification_Click(object sender, RoutedEventArgs e)
+    {
+        _state.TimerFinishNotificationEnabled = !_state.TimerFinishNotificationEnabled;
+        ShowToast(_state.TimerFinishNotificationEnabled
+            ? T("Timer finish notification enabled", "已启用计时结束通知")
+            : T("Timer finish notification disabled", "已关闭计时结束通知"));
+        UpdateAllUi();
+    }
+
+    private void TimerAutoNext_Click(object sender, RoutedEventArgs e) => SetTimerEndMode(TimerEndMode.AutoNext);
+
+    private void TimerHold_Click(object sender, RoutedEventArgs e) => SetTimerEndMode(TimerEndMode.Hold);
+
+    private void TimerOvertime_Click(object sender, RoutedEventArgs e) => SetTimerEndMode(TimerEndMode.Overtime);
+
+    private void SetTimerEndMode(TimerEndMode mode)
+    {
+        ActiveModeState().TimerEndMode = mode;
+        _timerExpiredHold = false;
+        _overtimeSeconds = 0;
+        UpdateAllUi();
+    }
+
+    private void IncreaseColors_Click(object sender, RoutedEventArgs e)
+    {
+        _state.ColorBlocksStripeCount = Math.Clamp(_state.ColorBlocksStripeCount + 1, 1, 20);
+        GeneratePalette();
+    }
+
+    private void DecreaseColors_Click(object sender, RoutedEventArgs e)
+    {
+        _state.ColorBlocksStripeCount = Math.Clamp(_state.ColorBlocksStripeCount - 1, 1, 20);
+        GeneratePalette();
+    }
+
+    private void RefreshColors_Click(object sender, RoutedEventArgs e)
+    {
+        GeneratePalette();
+        ShowToast(T("Colors refreshed", "颜色已刷新"));
+    }
+
+    private void ShapeMode_Click(object sender, RoutedEventArgs e)
+    {
+        _state.ColorBlocksShapeModeEnabled = !_state.ColorBlocksShapeModeEnabled;
+        RenderColorBlocks();
+        UpdateAllUi();
+    }
+
+    private void CopyColors_Click(object sender, RoutedEventArgs e)
+    {
+        if (_palette.Count == 0)
+        {
+            return;
+        }
+
+        if (_palette.Count == 1)
+        {
+            System.Windows.Clipboard.SetImage(CreateColorStripeBitmap(_palette.Select(c => _grayscaleDisplayEnabled ? ColorTools.ToGrayscale(c) : c).ToList()));
+        }
+        else
+        {
+            System.Windows.Clipboard.SetImage(CreateColorStripeBitmap(_palette.Select(c => _grayscaleDisplayEnabled ? ColorTools.ToGrayscale(c) : c).ToList()));
+        }
+
+        ShowToast(T("Colors copied", "颜色已复制"));
+    }
+
+    private void SetMinLuma_Click(object sender, RoutedEventArgs e) => SetColorThreshold(
+        T("Set Min Luma", "设置最低亮度"),
+        _state.ColorBlocksMinLuma,
+        value =>
+        {
+            if (value > _state.ColorBlocksMaxLuma)
+            {
+                ShowToast(T("Min luma cannot exceed max luma", "最低亮度不能高于最高亮度"));
+                return;
+            }
+
+            _state.ColorBlocksMinLuma = value;
+            GeneratePalette();
+        });
+
+    private void SetMaxLuma_Click(object sender, RoutedEventArgs e) => SetColorThreshold(
+        T("Set Max Luma", "设置最高亮度"),
+        _state.ColorBlocksMaxLuma,
+        value =>
+        {
+            if (value < _state.ColorBlocksMinLuma)
+            {
+                ShowToast(T("Max luma cannot be below min luma", "最高亮度不能低于最低亮度"));
+                return;
+            }
+
+            _state.ColorBlocksMaxLuma = value;
+            GeneratePalette();
+        });
+
+    private void SetMinSaturation_Click(object sender, RoutedEventArgs e) => SetColorThreshold(
+        T("Set Min Saturation", "设置最低饱和度"),
+        _state.ColorBlocksMinSaturation,
+        value =>
+        {
+            _state.ColorBlocksMinSaturation = value;
+            GeneratePalette();
+        });
+
+    private void SetColorThreshold(string title, double currentValue, Action<double> apply)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox(T("Enter a value from 0 to 1", "请输入 0 到 1 之间的数值"), title, currentValue.ToString("0.###", CultureInfo.InvariantCulture));
+        if (!double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        {
+            return;
+        }
+
+        apply(ClampUnit(value));
+        UpdateAllUi();
+    }
+
+    private void MosaicEnabled_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        ActiveModeState().MosaicEnabled = !ActiveModeState().MosaicEnabled;
+        ApplyImageEffects();
+        UpdateAllUi();
+    }
+
+    private void MosaicSmall_Click(object sender, RoutedEventArgs e) => SetMosaicSize(8);
+
+    private void MosaicMedium_Click(object sender, RoutedEventArgs e) => SetMosaicSize(16);
+
+    private void MosaicLarge_Click(object sender, RoutedEventArgs e) => SetMosaicSize(32);
+
+    private void SetMosaicSize(int size)
+    {
+        _state.MosaicDownsampleFactor = size;
+        ApplyImageEffects();
+        ShowToast("Mosaic size updated");
+    }
+
+    private void StayOnTop_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleStayOnTop();
+    }
+
+    private void LockAspect_Click(object sender, RoutedEventArgs e)
+    {
+        _state.LockImageViewportAspectRatio = !_state.LockImageViewportAspectRatio;
+        UpdateAllUi();
+    }
+
+    private void Grayscale_Click(object sender, RoutedEventArgs e)
+    {
+        _grayscaleDisplayEnabled = !_grayscaleDisplayEnabled;
+        _state.GrayscaleDisplayEnabled = _grayscaleDisplayEnabled;
+        ApplyImageEffects();
+        RenderColorBlocks();
+        RenderSampledImageColors();
+        ShowToast(_grayscaleDisplayEnabled ? T("Grayscale display enabled", "已启用灰度显示") : T("Grayscale display disabled", "已关闭灰度显示"));
+        UpdateAllUi();
+    }
+
+    private void SampleImageColors_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        _sampleImageColorsEnabled = !_sampleImageColorsEnabled;
+        _state.SampleImageColorsEnabled = _sampleImageColorsEnabled;
+        if (_sampleImageColorsEnabled)
+        {
+            SampleCurrentImageColors();
+        }
+        else
+        {
+            ClearSampledImageColors();
+            ShowToast(T("Image color samples hidden", "已隐藏图片颜色采样"));
+        }
+
+        UpdateAllUi();
+    }
+
+    private void EnglishLanguage_Click(object sender, RoutedEventArgs e)
+    {
+        _state.UiLanguage = "en";
+        ShowToast("Language set to English");
+        UpdateAllUi();
+    }
+
+    private void ChineseLanguage_Click(object sender, RoutedEventArgs e)
+    {
+        _state.UiLanguage = "zh";
+        ShowToast("界面语言已切换为中文");
+        UpdateAllUi();
+    }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        await CheckForUpdatesAsync(manual: true);
+    }
+
+    private void UpdateProxy_Click(object sender, RoutedEventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            T("Proxy URL for GitHub updates. Leave empty for direct connection.", "GitHub 更新代理地址。留空则直连。"),
+            T("Update Proxy", "更新代理"),
+            _state.UpdateProxyUrl);
+        try
+        {
+            _state.UpdateProxyUrl = UpdateService.ValidateProxyUrl(input);
+            ShowToast(T("Update proxy saved", "更新代理已保存"));
+        }
+        catch (ArgumentException ex)
+        {
+            ShowToast(ex.Message);
+        }
+    }
+
+    private async void ProtectedVideoExport_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_videoTools.Available)
+        {
+            ShowToast(T("Protected video export is unavailable: ", "受保护视频导出不可用：") + _videoTools.MissingReason);
+            return;
+        }
+
+        await ShowProtectedVideoExportDialogAsync();
+    }
+
+    private void ImageViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!IsImageMode || ActiveEntry is null)
+        {
+            return;
+        }
+
+        if (e.ClickCount == 2)
+        {
+            ResetImageView_Click(sender, e);
+            return;
+        }
+
+        _isDraggingImage = true;
+        _dragStart = e.GetPosition(ActiveViewport);
+        var state = GetCurrentImageViewState();
+        _dragStartOffsetX = state.OffsetX;
+        _dragStartOffsetY = state.OffsetY;
+        ActiveViewport.CaptureMouse();
+    }
+
+    private void ImageViewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingImage = false;
+        ActiveViewport.ReleaseMouseCapture();
+        SaveCurrentImageViewState();
+    }
+
+    private void ImageViewport_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isDraggingImage || !IsImageMode)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(ActiveViewport);
+        var state = GetCurrentImageViewState();
+        state.OffsetX = _dragStartOffsetX + point.X - _dragStart.X;
+        state.OffsetY = _dragStartOffsetY + point.Y - _dragStart.Y;
+        ApplyImageViewState();
+    }
+
+    private void ImageViewport_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!IsImageMode || ActiveEntry is null)
+        {
+            return;
+        }
+
+        var state = GetCurrentImageViewState();
+        var factor = e.Delta > 0 ? 1.12 : 1 / 1.12;
+        state.Scale = Math.Clamp(state.Scale * factor, 1.0, 8.0);
+        ApplyImageViewState();
+    }
+
+    private void ImageViewport_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        var menu = new ContextMenu();
+        menu.Items.Add(ContextItem("Previous Image", () => Navigate(-1)));
+        menu.Items.Add(ContextItem("Previous Image In Same Folder", () => NavigateSameFolder(-1), ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem("Next Image In Same Folder", () => NavigateSameFolder(1), ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem("Next Image", () => Navigate(1)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(ContextItem("Copy Image", CopyCurrentImage));
+        menu.Items.Add(ContextItem("Copy Image Path", CopyCurrentImagePath));
+        menu.Items.Add(ContextItem("Show In File Explorer", RevealCurrentImage, ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem("Resample 30 Image Colors", SampleCurrentImageColors, ActiveEntry is not null));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(ContextItem("Flip Horizontal", ToggleFlipHorizontal));
+        menu.Items.Add(ContextItem("Flip Vertical", ToggleFlipVertical));
+        menu.Items.Add(ContextItem("Rotate -90", () => RotateCurrentImage(-90)));
+        menu.Items.Add(ContextItem("Rotate +90", () => RotateCurrentImage(90)));
+        menu.Items.Add(ContextItem("Reset Current Image State", () => ResetImageView_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(ContextItem(_state.StayOnTop ? "Disable Stay On Top" : "Stay On Top", ToggleStayOnTop));
+        menu.IsOpen = true;
+    }
+
+    private void ColorBlocksPage_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(ContextItem("Refresh Colors", () => RefreshColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem("Increase Colors", () => IncreaseColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem("Decrease Colors", () => DecreaseColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem("Shape Mode", () => ShapeMode_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(ContextItem("Copy Colors", () => CopyColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(_state.StayOnTop ? "Disable Stay On Top" : "Stay On Top", ToggleStayOnTop));
+        menu.IsOpen = true;
+    }
+
+    private static MenuItem ContextItem(string header, Action action, bool enabled = true)
+    {
+        var item = new MenuItem { Header = header, IsEnabled = enabled };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private void ToggleFlipHorizontal()
+    {
+        _state.FlipHorizontal = !_state.FlipHorizontal;
+        ApplyImageViewState();
+        UpdateAllUi();
+    }
+
+    private void ToggleFlipVertical()
+    {
+        _state.FlipVertical = !_state.FlipVertical;
+        ApplyImageViewState();
+        UpdateAllUi();
+    }
+
+    private void ToggleStayOnTop()
+    {
+        _state.StayOnTop = !_state.StayOnTop;
+        UpdateAllUi();
+    }
+
+    private void RotateCurrentImage(int delta)
+    {
+        var state = GetCurrentImageViewState();
+        state.Rotation = NormalizeRotation(state.Rotation + delta);
+        ApplyImageViewState();
+    }
+
+    private void CopyCurrentImage()
+    {
+        if (_displayBitmapByMode.TryGetValue(_state.AppMode, out var bitmap) && bitmap is not null)
+        {
+            System.Windows.Clipboard.SetImage(bitmap);
+            ShowToast("Image copied");
+        }
+    }
+
+    private void CopyCurrentImagePath()
+    {
+        if (ActiveEntry is null)
+        {
+            return;
+        }
+
+        System.Windows.Clipboard.SetText(ActiveEntry.Path);
+        ShowToast("Image path copied");
+    }
+
+    private void RevealCurrentImage()
+    {
+        if (ActiveEntry is null || ActiveEntry.IsFromArchive)
+        {
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = "/select,\"" + ActiveEntry.Path + "\"",
+            UseShellExecute = true
+        });
+    }
+
+    private void ColorBlocksCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RenderColorBlocks();
+
+    private void ColorBlocksPage_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0)
+        {
+            return;
+        }
+
+        if (e.Delta > 0)
+        {
+            IncreaseColors_Click(sender, e);
+        }
+        else
+        {
+            DecreaseColors_Click(sender, e);
+        }
+    }
+
+    private void TimerText_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => ToggleTimer();
+
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.PageDown)
+        {
+            Navigate(1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.PageUp)
+        {
+            Navigate(-1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Space)
+        {
+            ToggleTimer();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.C && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            CopyCurrentImage();
+            e.Handled = true;
+        }
+    }
+
+    private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (WindowState == WindowState.Normal)
+        {
+            _state.WindowWidth = Math.Max(360, (int)Math.Round(Width));
+            _state.WindowHeight = Math.Max(360, (int)Math.Round(Height));
+        }
+
+        RenderSampledImageColors();
+    }
+
+    private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        SaveCurrentImageViewState();
+        if (WindowState == WindowState.Normal)
+        {
+            _state.WindowWidth = Math.Max(360, (int)Math.Round(Width));
+            _state.WindowHeight = Math.Max(360, (int)Math.Round(Height));
+        }
+
+        foreach (var pair in _entriesByMode)
+        {
+            if (pair.Key is AppMode.PhotoSwitching or AppMode.ColorPhoto)
+            {
+                _state.GetModeState(pair.Key).ImageOrder = pair.Value.Select(entry => entry.Path).ToList();
+            }
+        }
+
+        StateStore.Save(_state);
+        _imageLibrary.Dispose();
+    }
+}
