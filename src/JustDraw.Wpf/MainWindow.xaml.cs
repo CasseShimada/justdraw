@@ -125,10 +125,12 @@ public partial class MainWindow : Window
         var panel = MediaColor.FromRgb(28, 33, 37);
         var hoverAccent = AdjustThemeColor(accent, saturationFactor: 0.62, lightnessFactor: 0.74, alpha: 130);
         var separatorAccent = AdjustThemeColor(accent, saturationFactor: 0.48, lightnessFactor: 0.88, alpha: 112);
+        var arrowAccent = AdjustThemeColor(accent, saturationFactor: 1.15, lightnessFactor: 1.18, alpha: 230);
         Resources["AccentBrush"] = FrozenBrush(accent);
         Resources["AccentSoftBrush"] = FrozenBrush(MediaColor.FromArgb(58, accent.R, accent.G, accent.B));
         Resources["AccentHoverBrush"] = FrozenBrush(hoverAccent);
         Resources["AccentSeparatorBrush"] = FrozenBrush(separatorAccent);
+        Resources["AccentArrowBrush"] = FrozenBrush(arrowAccent);
         Resources["AppBackgroundBrush"] = FrozenBrush(background);
         Resources["SurfaceBrush"] = FrozenBrush(surface);
         Resources["PanelBrush"] = FrozenBrush(panel);
