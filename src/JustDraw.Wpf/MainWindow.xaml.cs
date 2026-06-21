@@ -132,6 +132,14 @@ public partial class MainWindow : Window
         Resources["ToastBrush"] = FrozenBrush(MediaColor.FromArgb(238, 22, 27, 31));
         Resources[System.Windows.SystemColors.HighlightBrushKey] = FrozenBrush(MediaColor.FromArgb(180, accent.R, accent.G, accent.B));
         Resources[System.Windows.SystemColors.HighlightTextBrushKey] = FrozenBrush(MediaColor.FromRgb(255, 255, 255));
+        Resources[System.Windows.SystemColors.ControlBrushKey] = FrozenBrush(panel);
+        Resources[System.Windows.SystemColors.ControlTextBrushKey] = FrozenBrush(MediaColor.FromRgb(242, 246, 247));
+        Resources[System.Windows.SystemColors.MenuBrushKey] = FrozenBrush(panel);
+        Resources[System.Windows.SystemColors.MenuTextBrushKey] = FrozenBrush(MediaColor.FromRgb(242, 246, 247));
+        Resources[System.Windows.SystemColors.WindowBrushKey] = FrozenBrush(panel);
+        Resources[System.Windows.SystemColors.WindowTextBrushKey] = FrozenBrush(MediaColor.FromRgb(242, 246, 247));
+        Resources[System.Windows.SystemColors.ActiveBorderBrushKey] = FrozenBrush(accent);
+        Resources[System.Windows.SystemColors.InactiveBorderBrushKey] = FrozenBrush(accent);
         Background = (System.Windows.Media.Brush)Resources["AppBackgroundBrush"];
         RootSurface?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         PhotoSwitchingPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
@@ -140,6 +148,7 @@ public partial class MainWindow : Window
         ColorBlocksCanvas?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         ColorPhotoPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         ColorPhotoViewport?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        ApplyMenuTheme();
     }
 
     private static SolidColorBrush FrozenBrush(MediaColor color)
@@ -187,6 +196,68 @@ public partial class MainWindow : Window
     }
 
     private static string ColorToHex(MediaColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
+    private void ApplyMenuTheme()
+    {
+        if (TopMenu is null)
+        {
+            return;
+        }
+
+        TopMenu.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
+        TopMenu.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
+        foreach (var item in EnumerateMenuItems(TopMenu.Items))
+        {
+            StyleMenuItem(item);
+        }
+    }
+
+    private IEnumerable<MenuItem> EnumerateMenuItems(ItemCollection items)
+    {
+        foreach (var rawItem in items)
+        {
+            if (rawItem is not MenuItem item)
+            {
+                continue;
+            }
+
+            yield return item;
+            foreach (var child in EnumerateMenuItems(item.Items))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    private void StyleMenuItem(MenuItem item)
+    {
+        item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
+        item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
+        item.BorderBrush = item.IsChecked
+            ? (System.Windows.Media.Brush)Resources["AccentBrush"]
+            : System.Windows.Media.Brushes.Transparent;
+        item.BorderThickness = item.IsChecked ? new Thickness(3, 0, 0, 0) : new Thickness(0);
+        item.Padding = new Thickness(10, 6, 10, 6);
+        item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentSoftBrush"];
+        item.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Resources["TextBrush"];
+        item.Resources[System.Windows.SystemColors.MenuBrushKey] = Resources["PanelBrush"];
+        item.Resources[System.Windows.SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
+        item.SubmenuOpened -= MenuItem_SubmenuOpened;
+        item.SubmenuOpened += MenuItem_SubmenuOpened;
+    }
+
+    private void MenuItem_SubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item)
+        {
+            return;
+        }
+
+        foreach (var child in EnumerateMenuItems(item.Items))
+        {
+            StyleMenuItem(child);
+        }
+    }
 
     private void ApplySafeStartupSize()
     {
@@ -827,6 +898,7 @@ public partial class MainWindow : Window
         PauseTimerItem.Header = _timerPaused ? T("Resume Timer", "继续计时") : T("Pause Timer", "暂停计时");
         Topmost = _state.StayOnTop;
         TopMenu.Visibility = _state.StayOnTop ? Visibility.Collapsed : Visibility.Visible;
+        ApplyMenuTheme();
         UpdateTimerText();
     }
 
