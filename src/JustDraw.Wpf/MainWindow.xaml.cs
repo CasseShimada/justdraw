@@ -123,9 +123,12 @@ public partial class MainWindow : Window
         var background = MediaColor.FromRgb(5, 7, 9);
         var surface = MediaColor.FromRgb(18, 22, 25);
         var panel = MediaColor.FromRgb(28, 33, 37);
+        var hoverAccent = AdjustThemeColor(accent, saturationFactor: 0.62, lightnessFactor: 0.74, alpha: 130);
+        var separatorAccent = AdjustThemeColor(accent, saturationFactor: 0.48, lightnessFactor: 0.88, alpha: 112);
         Resources["AccentBrush"] = FrozenBrush(accent);
         Resources["AccentSoftBrush"] = FrozenBrush(MediaColor.FromArgb(58, accent.R, accent.G, accent.B));
-        Resources["AccentHoverBrush"] = FrozenBrush(MediaColor.FromArgb(118, accent.R, accent.G, accent.B));
+        Resources["AccentHoverBrush"] = FrozenBrush(hoverAccent);
+        Resources["AccentSeparatorBrush"] = FrozenBrush(separatorAccent);
         Resources["AppBackgroundBrush"] = FrozenBrush(background);
         Resources["SurfaceBrush"] = FrozenBrush(surface);
         Resources["PanelBrush"] = FrozenBrush(panel);
@@ -160,6 +163,102 @@ public partial class MainWindow : Window
         brush.Freeze();
         return brush;
     }
+
+    private static MediaColor AdjustThemeColor(MediaColor color, double saturationFactor, double lightnessFactor, byte alpha)
+    {
+        RgbToHsl(color, out var hue, out var saturation, out var lightness);
+        saturation = ClampUnit(saturation * saturationFactor);
+        lightness = ClampUnit(lightness * lightnessFactor);
+        var adjusted = HslToRgb(hue, saturation, lightness);
+        return MediaColor.FromArgb(alpha, adjusted.R, adjusted.G, adjusted.B);
+    }
+
+    private static void RgbToHsl(MediaColor color, out double hue, out double saturation, out double lightness)
+    {
+        var r = color.R / 255.0;
+        var g = color.G / 255.0;
+        var b = color.B / 255.0;
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var delta = max - min;
+
+        lightness = (max + min) / 2.0;
+        if (delta == 0)
+        {
+            hue = 0;
+            saturation = 0;
+            return;
+        }
+
+        saturation = lightness > 0.5
+            ? delta / (2.0 - max - min)
+            : delta / (max + min);
+
+        if (max == r)
+        {
+            hue = (g - b) / delta + (g < b ? 6 : 0);
+        }
+        else if (max == g)
+        {
+            hue = (b - r) / delta + 2;
+        }
+        else
+        {
+            hue = (r - g) / delta + 4;
+        }
+
+        hue /= 6.0;
+    }
+
+    private static MediaColor HslToRgb(double hue, double saturation, double lightness)
+    {
+        if (saturation == 0)
+        {
+            var gray = ToByte(lightness);
+            return MediaColor.FromRgb(gray, gray, gray);
+        }
+
+        var q = lightness < 0.5
+            ? lightness * (1 + saturation)
+            : lightness + saturation - lightness * saturation;
+        var p = 2 * lightness - q;
+
+        return MediaColor.FromRgb(
+            ToByte(HueToRgb(p, q, hue + 1.0 / 3.0)),
+            ToByte(HueToRgb(p, q, hue)),
+            ToByte(HueToRgb(p, q, hue - 1.0 / 3.0)));
+    }
+
+    private static double HueToRgb(double p, double q, double t)
+    {
+        if (t < 0)
+        {
+            t += 1;
+        }
+        else if (t > 1)
+        {
+            t -= 1;
+        }
+
+        if (t < 1.0 / 6.0)
+        {
+            return p + (q - p) * 6 * t;
+        }
+
+        if (t < 1.0 / 2.0)
+        {
+            return q;
+        }
+
+        if (t < 2.0 / 3.0)
+        {
+            return p + (q - p) * (2.0 / 3.0 - t) * 6;
+        }
+
+        return p;
+    }
+
+    private static byte ToByte(double value) => (byte)Math.Round(ClampUnit(value) * 255);
 
     private static MediaColor ParseThemeColor(string value)
     {
@@ -248,6 +347,10 @@ public partial class MainWindow : Window
         item.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Resources["TextBrush"];
         item.Resources[System.Windows.SystemColors.MenuBrushKey] = Resources["PanelBrush"];
         item.Resources[System.Windows.SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
+        foreach (var separator in item.Items.OfType<Separator>())
+        {
+            StyleMenuSeparator(separator);
+        }
         item.SubmenuOpened -= MenuItem_SubmenuOpened;
         item.SubmenuOpened += MenuItem_SubmenuOpened;
         item.MouseEnter -= MenuItem_MouseEnter;
@@ -276,6 +379,14 @@ public partial class MainWindow : Window
 
         item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
         item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
+    }
+
+    private void StyleMenuSeparator(Separator separator)
+    {
+        separator.Background = (System.Windows.Media.Brush)Resources["AccentSeparatorBrush"];
+        separator.BorderBrush = (System.Windows.Media.Brush)Resources["AccentSeparatorBrush"];
+        separator.Margin = new Thickness(28, 5, 8, 5);
+        separator.Height = 1;
     }
 
     private FrameworkElement CreateMenuCheckIcon(bool isChecked)
@@ -347,6 +458,10 @@ public partial class MainWindow : Window
         border.BorderThickness = new Thickness(1);
         border.Background = (System.Windows.Media.Brush)Resources["PanelBrush"];
         border.SnapsToDevicePixels = true;
+        foreach (var separator in FindVisualChildren<Separator>(border))
+        {
+            StyleMenuSeparator(separator);
+        }
     }
 
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
