@@ -123,6 +123,7 @@ public partial class MainWindow : Window
         var panel = MediaColor.FromRgb(28, 33, 37);
         Resources["AccentBrush"] = FrozenBrush(accent);
         Resources["AccentSoftBrush"] = FrozenBrush(MediaColor.FromArgb(58, accent.R, accent.G, accent.B));
+        Resources["AccentHoverBrush"] = FrozenBrush(MediaColor.FromArgb(118, accent.R, accent.G, accent.B));
         Resources["AppBackgroundBrush"] = FrozenBrush(background);
         Resources["SurfaceBrush"] = FrozenBrush(surface);
         Resources["PanelBrush"] = FrozenBrush(panel);
@@ -130,7 +131,7 @@ public partial class MainWindow : Window
         Resources["MutedTextBrush"] = FrozenBrush(MediaColor.FromRgb(160, 170, 175));
         Resources["TimerBadgeBrush"] = FrozenBrush(MediaColor.FromArgb(226, 10, 12, 14));
         Resources["ToastBrush"] = FrozenBrush(MediaColor.FromArgb(238, 22, 27, 31));
-        Resources[System.Windows.SystemColors.HighlightBrushKey] = FrozenBrush(MediaColor.FromArgb(180, accent.R, accent.G, accent.B));
+        Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentHoverBrush"];
         Resources[System.Windows.SystemColors.HighlightTextBrushKey] = FrozenBrush(MediaColor.FromRgb(255, 255, 255));
         Resources[System.Windows.SystemColors.ControlBrushKey] = FrozenBrush(panel);
         Resources[System.Windows.SystemColors.ControlTextBrushKey] = FrozenBrush(MediaColor.FromRgb(242, 246, 247));
@@ -239,12 +240,38 @@ public partial class MainWindow : Window
         item.BorderThickness = item.IsChecked ? new Thickness(3, 0, 0, 0) : new Thickness(0);
         item.Icon = CreateMenuCheckIcon(item.IsChecked);
         item.Padding = new Thickness(10, 6, 10, 6);
-        item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentSoftBrush"];
+        item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentHoverBrush"];
         item.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Resources["TextBrush"];
         item.Resources[System.Windows.SystemColors.MenuBrushKey] = Resources["PanelBrush"];
         item.Resources[System.Windows.SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
         item.SubmenuOpened -= MenuItem_SubmenuOpened;
         item.SubmenuOpened += MenuItem_SubmenuOpened;
+        item.MouseEnter -= MenuItem_MouseEnter;
+        item.MouseEnter += MenuItem_MouseEnter;
+        item.MouseLeave -= MenuItem_MouseLeave;
+        item.MouseLeave += MenuItem_MouseLeave;
+    }
+
+    private void MenuItem_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (sender is not MenuItem item || !item.IsEnabled)
+        {
+            return;
+        }
+
+        item.Background = (System.Windows.Media.Brush)Resources["AccentHoverBrush"];
+        item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
+    }
+
+    private void MenuItem_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (sender is not MenuItem item)
+        {
+            return;
+        }
+
+        item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
+        item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
     }
 
     private FrameworkElement CreateMenuCheckIcon(bool isChecked)
