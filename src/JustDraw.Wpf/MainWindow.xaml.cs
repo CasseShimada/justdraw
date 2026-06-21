@@ -237,6 +237,7 @@ public partial class MainWindow : Window
             ? (System.Windows.Media.Brush)Resources["AccentBrush"]
             : System.Windows.Media.Brushes.Transparent;
         item.BorderThickness = item.IsChecked ? new Thickness(3, 0, 0, 0) : new Thickness(0);
+        item.Icon = CreateMenuCheckIcon(item.IsChecked);
         item.Padding = new Thickness(10, 6, 10, 6);
         item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentSoftBrush"];
         item.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Resources["TextBrush"];
@@ -244,6 +245,33 @@ public partial class MainWindow : Window
         item.Resources[System.Windows.SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
         item.SubmenuOpened -= MenuItem_SubmenuOpened;
         item.SubmenuOpened += MenuItem_SubmenuOpened;
+    }
+
+    private FrameworkElement CreateMenuCheckIcon(bool isChecked)
+    {
+        var container = new Grid
+        {
+            Width = 16,
+            Height = 16,
+            Margin = new Thickness(0, 0, 4, 0)
+        };
+
+        if (!isChecked)
+        {
+            return container;
+        }
+
+        var check = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 3 8.5 L 6.5 12 L 13 4"),
+            Stroke = (System.Windows.Media.Brush)Resources["AccentBrush"],
+            StrokeThickness = 2.2,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round
+        };
+        container.Children.Add(check);
+        return container;
     }
 
     private void MenuItem_SubmenuOpened(object sender, RoutedEventArgs e)
