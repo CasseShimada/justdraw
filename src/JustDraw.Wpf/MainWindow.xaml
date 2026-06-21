@@ -233,6 +233,7 @@
                 <MenuItem x:Name="PhotoSwitchingModeItem" Header="Photo Switching" Click="PhotoSwitchingMode_Click" />
                 <MenuItem x:Name="ColorBlocksModeItem" Header="Color Blocks" Click="ColorBlocksMode_Click" />
                 <MenuItem x:Name="ColorPhotoModeItem" Header="Color Photo" Click="ColorPhotoMode_Click" />
+                <MenuItem x:Name="VideoFramesModeItem" Header="Video Frames" Click="VideoFramesMode_Click" />
             </MenuItem>
             <MenuItem Header="Timer" x:Name="TimerMenu">
                 <MenuItem x:Name="PauseTimerItem" Header="Pause Timer" Click="PauseTimer_Click" />
@@ -335,6 +336,29 @@
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                FontSize="22" Opacity="0.75" />
                 </Grid>
+            </Grid>
+
+            <Grid x:Name="VideoFramesPage" Background="{DynamicResource AppBackgroundBrush}" Visibility="Collapsed">
+                <Grid x:Name="VideoFramesViewport" Background="{DynamicResource AppBackgroundBrush}" ClipToBounds="True"
+                      MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"
+                      MouseLeftButtonUp="ImageViewport_MouseLeftButtonUp"
+                      MouseMove="ImageViewport_MouseMove"
+                      MouseWheel="ImageViewport_MouseWheel"
+                      MouseRightButtonUp="ImageViewport_MouseRightButtonUp">
+                    <Image x:Name="VideoFrameImage" Stretch="Uniform" RenderTransformOrigin="0.5,0.5"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Canvas x:Name="VideoFrameSampleColorsCanvas" IsHitTestVisible="False" />
+                    <TextBlock x:Name="VideoFrameEmptyText" Text="Import a video to begin"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="22" Opacity="0.75" />
+                </Grid>
+
+                <Border x:Name="VideoFrameBadge" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="14" Padding="12,7" Background="{DynamicResource TimerBadgeBrush}"
+                        BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="VideoFrameText" Text="Frame 0 / 0" FontSize="13" />
+                </Border>
             </Grid>
 
             <Border x:Name="Toast" HorizontalAlignment="Center" VerticalAlignment="Bottom"

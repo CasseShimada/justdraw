@@ -9,7 +9,8 @@ public enum AppMode
 {
     PhotoSwitching,
     ColorBlocks,
-    ColorPhoto
+    ColorPhoto,
+    VideoFrames
 }
 
 public enum TimerEndMode
@@ -31,6 +32,7 @@ public sealed class ModeState
 {
     public string ImageRootPath { get; set; } = "";
     public string LastImagePath { get; set; } = "";
+    public int VideoFrameIndex { get; set; }
     public bool RandomPlayMode { get; set; }
     public int TimerSeconds { get; set; } = 90;
     public TimerEndMode TimerEndMode { get; set; } = TimerEndMode.AutoNext;
@@ -66,7 +68,8 @@ public sealed class JustDrawState
     public Dictionary<AppMode, ModeState> Modes { get; set; } = new()
     {
         [AppMode.PhotoSwitching] = new ModeState(),
-        [AppMode.ColorPhoto] = new ModeState()
+        [AppMode.ColorPhoto] = new ModeState(),
+        [AppMode.VideoFrames] = new ModeState()
     };
 
     [JsonIgnore]
@@ -75,9 +78,12 @@ public sealed class JustDrawState
     [JsonIgnore]
     public ModeState ColorPhoto => GetModeState(AppMode.ColorPhoto);
 
+    [JsonIgnore]
+    public ModeState VideoFrames => GetModeState(AppMode.VideoFrames);
+
     public ModeState GetModeState(AppMode mode)
     {
-        if (mode != AppMode.PhotoSwitching && mode != AppMode.ColorPhoto)
+        if (mode is not (AppMode.PhotoSwitching or AppMode.ColorPhoto or AppMode.VideoFrames))
         {
             return PhotoSwitching;
         }
@@ -137,6 +143,7 @@ public static class StateStore
             var state = JsonSerializer.Deserialize<JustDrawState>(text, Options) ?? new JustDrawState();
             _ = state.PhotoSwitching;
             _ = state.ColorPhoto;
+            _ = state.VideoFrames;
             state.MosaicDownsampleFactor = Math.Clamp(state.MosaicDownsampleFactor, 4, 64);
             state.ColorBlocksStripeCount = Math.Clamp(state.ColorBlocksStripeCount, 1, 20);
             return state;

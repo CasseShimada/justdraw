@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _startupUpdateTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly UpdateService _updateService = new();
     private readonly VideoExportService _videoExportService = new();
+    private readonly VideoFrameCache _videoFrameCache = new();
     private readonly VideoToolsInfo _videoTools = VideoExportService.FindTools();
     private readonly Dictionary<AppMode, List<ImageEntry>> _entriesByMode = [];
     private readonly Dictionary<AppMode, int> _currentIndexByMode = [];
@@ -48,6 +49,8 @@ public partial class MainWindow : Window
     private bool _timerExpiredHold;
     private bool _updateBusy;
     private bool _videoExportBusy;
+    private int _videoFrameLoadVersion;
+    private CancellationTokenSource _videoFrameLoadCts = new();
     private int _timerRemaining;
     private int _overtimeSeconds;
     private int _countdownRemaining;
@@ -60,6 +63,11 @@ public partial class MainWindow : Window
     {
         _state = StateStore.Load();
         InitializeComponent();
+        if (_state.AppMode == AppMode.VideoFrames && !_videoTools.Available)
+        {
+            _state.AppMode = AppMode.PhotoSwitching;
+        }
+
         ApplyIcon();
         ApplyTheme();
         ApplySafeStartupSize();
@@ -80,13 +88,32 @@ public partial class MainWindow : Window
 
     private ModeState ActiveModeState() => _state.GetModeState(_state.AppMode);
 
-    private bool IsImageMode => _state.AppMode is AppMode.PhotoSwitching or AppMode.ColorPhoto;
+    private bool IsImageMode => _state.AppMode is AppMode.PhotoSwitching or AppMode.ColorPhoto or AppMode.VideoFrames;
 
-    private WpfImage ActiveImage => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoImage : PhotoImage;
+    private bool IsImageLibraryMode => _state.AppMode is AppMode.PhotoSwitching or AppMode.ColorPhoto;
 
-    private Grid ActiveViewport => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoViewport : PhotoViewport;
+    private bool IsVideoFrameMode => _state.AppMode == AppMode.VideoFrames;
 
-    private Canvas ActiveSampleColorsCanvas => _state.AppMode == AppMode.ColorPhoto ? ColorPhotoSampleColorsCanvas : PhotoSampleColorsCanvas;
+    private WpfImage ActiveImage => _state.AppMode switch
+    {
+        AppMode.ColorPhoto => ColorPhotoImage,
+        AppMode.VideoFrames => VideoFrameImage,
+        _ => PhotoImage
+    };
+
+    private Grid ActiveViewport => _state.AppMode switch
+    {
+        AppMode.ColorPhoto => ColorPhotoViewport,
+        AppMode.VideoFrames => VideoFramesViewport,
+        _ => PhotoViewport
+    };
+
+    private Canvas ActiveSampleColorsCanvas => _state.AppMode switch
+    {
+        AppMode.ColorPhoto => ColorPhotoSampleColorsCanvas,
+        AppMode.VideoFrames => VideoFrameSampleColorsCanvas,
+        _ => PhotoSampleColorsCanvas
+    };
 
     private List<ImageEntry> ActiveEntries => _entriesByMode.TryGetValue(_state.AppMode, out var entries) ? entries : [];
 
@@ -156,6 +183,8 @@ public partial class MainWindow : Window
         ColorBlocksCanvas?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         ColorPhotoPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         ColorPhotoViewport?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        VideoFramesPage?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
+        VideoFramesViewport?.SetValue(BackgroundProperty, Resources["AppBackgroundBrush"]);
         ApplyMenuTheme();
     }
 
@@ -506,7 +535,7 @@ public partial class MainWindow : Window
             Top = Math.Max(SystemParameters.WorkArea.Top, Math.Min(Top, SystemParameters.WorkArea.Bottom - ActualHeight));
         }
 
-        if (IsImageMode && string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
+        if (IsImageLibraryMode && string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
         {
             Dispatcher.BeginInvoke(new Action(PromptForInitialImageFolder), DispatcherPriority.ApplicationIdle);
         }
@@ -514,7 +543,7 @@ public partial class MainWindow : Window
 
     private void PromptForInitialImageFolder()
     {
-        if (!IsImageMode || !string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
+        if (!IsImageLibraryMode || !string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
         {
             return;
         }
@@ -544,6 +573,10 @@ public partial class MainWindow : Window
     {
         LoadSourceForMode(AppMode.PhotoSwitching, showToast: false);
         LoadSourceForMode(AppMode.ColorPhoto, showToast: false);
+        if (_videoTools.Available)
+        {
+            LoadSourceForMode(AppMode.VideoFrames, showToast: false);
+        }
     }
 
     private void LoadSourceForMode(AppMode mode, bool showToast)
@@ -552,6 +585,16 @@ public partial class MainWindow : Window
         var source = modeState.ImageRootPath;
         if (string.IsNullOrWhiteSpace(source))
         {
+            return;
+        }
+
+        if (mode == AppMode.VideoFrames)
+        {
+            if (_videoTools.Available && File.Exists(source))
+            {
+                _loadedSources.Add(mode);
+            }
+
             return;
         }
 
@@ -606,7 +649,16 @@ public partial class MainWindow : Window
         foreach (var path in recent)
         {
             var item = new MenuItem { Header = path };
-            item.Click += (_, _) => OpenImageSource(path);
+            item.Click += (_, _) =>
+            {
+                if (IsVideoFrameMode)
+                {
+                    _ = OpenVideoFrameSourceAsync(path, showToast: true);
+                    return;
+                }
+
+                OpenImageSource(path);
+            };
             RecentPathsMenu.Items.Add(item);
         }
     }
@@ -640,6 +692,7 @@ public partial class MainWindow : Window
         PhotoSwitchingPage.Visibility = mode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
         ColorBlocksPage.Visibility = mode == AppMode.ColorBlocks ? Visibility.Visible : Visibility.Collapsed;
         ColorPhotoPage.Visibility = mode == AppMode.ColorPhoto ? Visibility.Visible : Visibility.Collapsed;
+        VideoFramesPage.Visibility = mode == AppMode.VideoFrames ? Visibility.Visible : Visibility.Collapsed;
         FileMenu.Visibility = IsImageMode ? Visibility.Visible : Visibility.Collapsed;
         TimerMenu.Visibility = mode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
         ColorToolsMenu.Visibility = mode == AppMode.ColorBlocks ? Visibility.Visible : Visibility.Collapsed;
@@ -649,12 +702,32 @@ public partial class MainWindow : Window
         _overtimeSeconds = 0;
         _timerPaused = mode != AppMode.PhotoSwitching || _timerPaused;
 
-        if (IsImageMode && !_loadedSources.Contains(mode))
+        if (IsImageLibraryMode && !_loadedSources.Contains(mode))
         {
             LoadSourceForMode(mode, showToast: false);
         }
 
-        RefreshActiveView();
+        var activeVideoSource = ActiveModeState().ImageRootPath;
+        var pendingVideoOpen = mode == AppMode.VideoFrames
+            && !string.IsNullOrWhiteSpace(activeVideoSource)
+            && File.Exists(activeVideoSource)
+            && _videoFrameCache.CurrentVideo?.Path != activeVideoSource;
+        if (pendingVideoOpen)
+        {
+            _ = OpenSavedVideoFrameSourceAsync();
+        }
+
+        if (!pendingVideoOpen)
+        {
+            RefreshActiveView();
+        }
+        else
+        {
+            VideoFrameEmptyText.Visibility = Visibility.Collapsed;
+            VideoFrameBadge.Visibility = Visibility.Visible;
+            VideoFrameText.Text = T("Loading video...", "正在载入视频...");
+        }
+
         UpdateAllUi();
     }
 
@@ -664,6 +737,12 @@ public partial class MainWindow : Window
         {
             ClearSampledImageColors();
             RenderColorBlocks();
+            return;
+        }
+
+        if (IsVideoFrameMode)
+        {
+            _ = LoadCurrentVideoFrameAsync();
             return;
         }
 
@@ -682,8 +761,156 @@ public partial class MainWindow : Window
         UpdateAllUi();
     }
 
+    private async Task OpenSavedVideoFrameSourceAsync()
+    {
+        var source = ActiveModeState().ImageRootPath;
+        if (!_videoTools.Available || string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+        {
+            return;
+        }
+
+        await OpenVideoFrameSourceAsync(source, showToast: false);
+    }
+
+    private async Task OpenVideoFrameSourceAsync(string sourcePath, bool showToast)
+    {
+        if (!_videoTools.Available)
+        {
+            return;
+        }
+
+        try
+        {
+            CancelVideoFrameLoad();
+            var info = await _videoFrameCache.OpenAsync(_videoTools, sourcePath);
+            var modeState = _state.GetModeState(AppMode.VideoFrames);
+            var previousSource = modeState.ImageRootPath;
+            modeState.ImageRootPath = sourcePath;
+            modeState.LastImagePath = sourcePath;
+            modeState.VideoFrameIndex = string.Equals(previousSource, sourcePath, StringComparison.OrdinalIgnoreCase)
+                ? Math.Clamp(modeState.VideoFrameIndex, 0, info.FrameCount - 1)
+                : 0;
+            _currentIndexByMode[AppMode.VideoFrames] = modeState.VideoFrameIndex;
+            _entriesByMode.Remove(AppMode.VideoFrames);
+            _sourceBitmapByMode.Remove(AppMode.VideoFrames);
+            _displayBitmapByMode.Remove(AppMode.VideoFrames);
+            _loadedSources.Add(AppMode.VideoFrames);
+            RememberRecentPath(modeState, sourcePath);
+            if (showToast)
+            {
+                ShowToast(T("Video loaded: ", "视频已载入：") + IoPath.GetFileName(sourcePath));
+            }
+
+            if (IsVideoFrameMode)
+            {
+                await LoadCurrentVideoFrameAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast(T("Cannot open video: ", "无法打开视频：") + ex.Message);
+        }
+        finally
+        {
+            UpdateAllUi();
+        }
+    }
+
+    private async Task LoadCurrentVideoFrameAsync()
+    {
+        if (!IsVideoFrameMode)
+        {
+            return;
+        }
+
+        var video = _videoFrameCache.CurrentVideo;
+        if (video is null)
+        {
+            ActiveImage.Source = null;
+            VideoFrameEmptyText.Visibility = Visibility.Visible;
+            VideoFrameBadge.Visibility = Visibility.Collapsed;
+            ClearSampledImageColors();
+            return;
+        }
+
+        var modeState = ActiveModeState();
+        var frameIndex = Math.Clamp(modeState.VideoFrameIndex, 0, video.FrameCount - 1);
+        modeState.VideoFrameIndex = frameIndex;
+        CurrentIndex = frameIndex;
+        var version = ++_videoFrameLoadVersion;
+        _videoFrameLoadCts.Cancel();
+        _videoFrameLoadCts = new CancellationTokenSource();
+        var token = _videoFrameLoadCts.Token;
+        VideoFrameText.Text = T("Loading frame ", "正在载入帧 ") + (frameIndex + 1).ToString(CultureInfo.InvariantCulture);
+        VideoFrameBadge.Visibility = Visibility.Visible;
+
+        try
+        {
+            var path = await _videoFrameCache.GetFrameAsync(frameIndex, token);
+            if (token.IsCancellationRequested || version != _videoFrameLoadVersion || !IsVideoFrameMode)
+            {
+                return;
+            }
+
+            var bitmap = LoadBitmap(path);
+            _sourceBitmapByMode[AppMode.VideoFrames] = bitmap;
+            ApplyImageEffects();
+            ApplyImageViewState();
+            ResampleImageColorsIfEnabled();
+            VideoFrameEmptyText.Visibility = Visibility.Collapsed;
+            UpdateVideoFrameText();
+            _videoFrameCache.PreloadAround(frameIndex);
+        }
+        catch (OperationCanceledException)
+        {
+            // Newer frame request won.
+        }
+        catch (Exception ex)
+        {
+            ShowToast(T("Cannot load frame: ", "无法载入帧：") + ex.Message);
+        }
+    }
+
+    private static BitmapImage LoadBitmap(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(path);
+        bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private void CancelVideoFrameLoad()
+    {
+        _videoFrameLoadVersion++;
+        _videoFrameLoadCts.Cancel();
+    }
+
+    private void UpdateVideoFrameText()
+    {
+        var video = _videoFrameCache.CurrentVideo;
+        if (video is null)
+        {
+            VideoFrameBadge.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var frame = Math.Clamp(ActiveModeState().VideoFrameIndex, 0, video.FrameCount - 1);
+        VideoFrameText.Text = T("Frame ", "帧 ") + (frame + 1).ToString(CultureInfo.InvariantCulture) + " / " + video.FrameCount.ToString(CultureInfo.InvariantCulture);
+        VideoFrameBadge.Visibility = Visibility.Visible;
+    }
+
     private void LoadCurrentImage()
     {
+        if (IsVideoFrameMode)
+        {
+            _ = LoadCurrentVideoFrameAsync();
+            return;
+        }
+
         var entry = ActiveEntry;
         if (entry is null)
         {
@@ -695,13 +922,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource = new Uri(entry.Path);
-            bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
-            bitmap.EndInit();
-            bitmap.Freeze();
+            var bitmap = LoadBitmap(entry.Path);
             _sourceBitmapByMode[_state.AppMode] = bitmap;
             ActiveModeState().LastImagePath = entry.Path;
             ApplyImageEffects();
@@ -777,25 +998,35 @@ public partial class MainWindow : Window
 
     private ImageViewState GetCurrentImageViewState()
     {
-        var entry = ActiveEntry;
-        if (entry is null)
+        var key = GetCurrentViewStateKey();
+        if (string.IsNullOrWhiteSpace(key))
         {
             return new ImageViewState();
         }
 
         var modeState = ActiveModeState();
-        if (!modeState.ImageViewStates.TryGetValue(entry.Path, out var state))
+        if (!modeState.ImageViewStates.TryGetValue(key, out var state))
         {
             state = new ImageViewState();
-            modeState.ImageViewStates[entry.Path] = state;
+            modeState.ImageViewStates[key] = state;
         }
 
         return state;
     }
 
+    private string GetCurrentViewStateKey()
+    {
+        if (IsVideoFrameMode)
+        {
+            return ActiveModeState().ImageRootPath;
+        }
+
+        return ActiveEntry?.Path ?? "";
+    }
+
     private void SaveCurrentImageViewState()
     {
-        if (!IsImageMode || ActiveEntry is null)
+        if (!IsImageMode || (!IsVideoFrameMode && ActiveEntry is null))
         {
             return;
         }
@@ -842,6 +1073,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (IsVideoFrameMode)
+        {
+            NavigateVideoFrame(delta, random: false);
+            return;
+        }
+
         var entries = ActiveEntries;
         if (entries.Count == 0)
         {
@@ -865,9 +1102,33 @@ public partial class MainWindow : Window
         UpdateTimerText();
     }
 
+    private void NavigateVideoFrame(int delta, bool random)
+    {
+        var video = _videoFrameCache.CurrentVideo;
+        if (video is null)
+        {
+            return;
+        }
+
+        SaveCurrentImageViewState();
+        var modeState = ActiveModeState();
+        if (random)
+        {
+            modeState.VideoFrameIndex = Random.Shared.Next(video.FrameCount);
+        }
+        else
+        {
+            modeState.VideoFrameIndex = (modeState.VideoFrameIndex + delta + video.FrameCount) % video.FrameCount;
+        }
+
+        CurrentIndex = modeState.VideoFrameIndex;
+        _ = LoadCurrentVideoFrameAsync();
+        UpdateVideoFrameText();
+    }
+
     private void NavigateSameFolder(int delta)
     {
-        if (!IsImageMode || ActiveEntry is null || ActiveEntry.IsFromArchive)
+        if (IsVideoFrameMode || !IsImageMode || ActiveEntry is null || ActiveEntry.IsFromArchive)
         {
             Navigate(delta);
             return;
@@ -1100,6 +1361,7 @@ public partial class MainWindow : Window
         _sampledImageColors.Clear();
         PhotoSampleColorsCanvas.Children.Clear();
         ColorPhotoSampleColorsCanvas.Children.Clear();
+        VideoFrameSampleColorsCanvas.Children.Clear();
     }
 
     private void UpdateAllUi()
@@ -1109,6 +1371,7 @@ public partial class MainWindow : Window
         SetMenuChecked(PhotoSwitchingModeItem, _state.AppMode == AppMode.PhotoSwitching);
         SetMenuChecked(ColorBlocksModeItem, _state.AppMode == AppMode.ColorBlocks);
         SetMenuChecked(ColorPhotoModeItem, _state.AppMode == AppMode.ColorPhoto);
+        SetMenuChecked(VideoFramesModeItem, _state.AppMode == AppMode.VideoFrames);
         SetMenuChecked(RandomPlayItem, ActiveModeState().RandomPlayMode);
         SetMenuChecked(PrestartCountdownItem, ActiveModeState().PrestartCountdownEnabled);
         SetMenuChecked(TimerNotificationItem, _state.TimerFinishNotificationEnabled);
@@ -1122,6 +1385,7 @@ public partial class MainWindow : Window
         SetMenuChecked(EnglishLanguageItem, !IsChinese);
         SetMenuChecked(ChineseLanguageItem, IsChinese);
         ProtectedVideoExportItem.IsEnabled = _videoTools.Available && !_videoExportBusy;
+        VideoFramesModeItem.Visibility = _videoTools.Available ? Visibility.Visible : Visibility.Collapsed;
         SetMenuChecked(TimerAutoNextItem, ActiveModeState().TimerEndMode == TimerEndMode.AutoNext);
         SetMenuChecked(TimerHoldItem, ActiveModeState().TimerEndMode == TimerEndMode.Hold);
         SetMenuChecked(TimerOvertimeItem, ActiveModeState().TimerEndMode == TimerEndMode.Overtime);
@@ -1137,11 +1401,11 @@ public partial class MainWindow : Window
         Title = T("Just Draw!", "Just Draw!");
         FileMenu.Header = T("File", "文件");
         SetImageFolderItem.Header = T("Set Image Folder...", "选择图片文件夹...");
-        RecentPathsMenu.Header = T("Recent Paths", "最近路径");
-        DeletePathPlaybackStateItem.Header = T("Delete Path Playback State...", "删除路径播放状态...");
-        RefreshRandomItem.Header = T("Refresh List Order + Random Image", "刷新顺序并随机图片");
-        ResetCurrentImageStateItem.Header = T("Reset Current Image State", "重置当前图片状态");
-        ResetCurrentPathImageStatesItem.Header = T("Reset Current Path Image States", "重置当前路径图片状态");
+        RecentPathsMenu.Header = IsVideoFrameMode ? T("Recent Videos", "最近视频") : T("Recent Paths", "最近路径");
+        DeletePathPlaybackStateItem.Header = IsVideoFrameMode ? T("Delete Video Playback State...", "删除视频播放状态...") : T("Delete Path Playback State...", "删除路径播放状态...");
+        RefreshRandomItem.Header = IsVideoFrameMode ? T("Random Frame", "随机帧") : T("Refresh List Order + Random Image", "刷新顺序并随机图片");
+        ResetCurrentImageStateItem.Header = IsVideoFrameMode ? T("Reset Current Video View", "重置当前视频视图") : T("Reset Current Image State", "重置当前图片状态");
+        ResetCurrentPathImageStatesItem.Header = IsVideoFrameMode ? T("Reset Video View States", "重置视频视图状态") : T("Reset Current Path Image States", "重置当前路径图片状态");
         ExitItem.Header = T("Exit", "退出");
         WindowMenu.Header = T("Window", "窗口");
         ProtectedVideoExportItem.Header = T("Protected Video Export...", "受保护视频导出...");
@@ -1149,6 +1413,7 @@ public partial class MainWindow : Window
         PhotoSwitchingModeItem.Header = T("Photo Switching", "图片切换");
         ColorBlocksModeItem.Header = T("Color Blocks", "色块练习");
         ColorPhotoModeItem.Header = T("Color Photo", "色彩照片");
+        VideoFramesModeItem.Header = T("Video Frames", "视频逐帧");
         TimerMenu.Header = T("Timer", "计时器");
         SetTimerItem.Header = T("Set Timer...", "设置计时...");
         ResetTimerItem.Header = T("Reset Timer", "重置计时");
@@ -1185,9 +1450,15 @@ public partial class MainWindow : Window
         LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
         SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
+        var sourcePrompt = IsVideoFrameMode
+            ? T("Import Video...", "导入视频...")
+            : T("Set Image Folder...", "选择图片文件夹...");
+        SetImageFolderItem.Header = sourcePrompt;
         PhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
         ColorPhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
+        VideoFrameEmptyText.Text = T("Import a video to begin", "请导入视频开始");
         ColorCountText.Text = T("Colors: ", "颜色数：") + Math.Max(1, _palette.Count);
+        UpdateVideoFrameText();
     }
 
     private void UpdateTimerText()
@@ -1612,6 +1883,12 @@ public partial class MainWindow : Window
 
     private void SetImageFolder_Click(object sender, RoutedEventArgs e)
     {
+        if (IsVideoFrameMode)
+        {
+            _ = ImportVideoFrameSourceAsync();
+            return;
+        }
+
         using var dialog = new Forms.FolderBrowserDialog
         {
             Description = "Select image folder",
@@ -1624,6 +1901,25 @@ public partial class MainWindow : Window
         }
 
         OpenImageSource(dialog.SelectedPath);
+    }
+
+    private async Task ImportVideoFrameSourceAsync()
+    {
+        if (!_videoTools.Available)
+        {
+            return;
+        }
+
+        var picker = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Video Files (*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.ts;*.mts;*.m2ts)|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.ts;*.mts;*.m2ts|All Files (*.*)|*.*"
+        };
+        if (picker.ShowDialog(this) != true || !IsVideoPath(picker.FileName))
+        {
+            return;
+        }
+
+        await OpenVideoFrameSourceAsync(picker.FileName, showToast: true);
     }
 
     private void DeletePathPlaybackState_Click(object sender, RoutedEventArgs e)
@@ -1639,6 +1935,16 @@ public partial class MainWindow : Window
         modeState.LastImagePath = "";
         modeState.ImageOrder.Clear();
         modeState.ImageViewStates.Clear();
+        modeState.VideoFrameIndex = 0;
+        if (IsVideoFrameMode)
+        {
+            CurrentIndex = 0;
+            _ = LoadCurrentVideoFrameAsync();
+            ShowToast(T("Path playback state deleted", "已删除当前路径播放状态"));
+            UpdateAllUi();
+            return;
+        }
+
         _entriesByMode.Remove(_state.AppMode);
         _currentIndexByMode[_state.AppMode] = 0;
         _loadedSources.Remove(_state.AppMode);
@@ -1651,6 +1957,13 @@ public partial class MainWindow : Window
     {
         if (!IsImageMode)
         {
+            return;
+        }
+
+        if (IsVideoFrameMode)
+        {
+            NavigateVideoFrame(1, random: true);
+            ShowToast(T("Random frame", "随机帧"));
             return;
         }
 
@@ -1669,12 +1982,13 @@ public partial class MainWindow : Window
 
     private void ResetImageView_Click(object sender, RoutedEventArgs e)
     {
-        if (ActiveEntry is null)
+        var key = GetCurrentViewStateKey();
+        if (string.IsNullOrWhiteSpace(key))
         {
             return;
         }
 
-        ActiveModeState().ImageViewStates[ActiveEntry.Path] = new ImageViewState();
+        ActiveModeState().ImageViewStates[key] = new ImageViewState();
         ApplyImageViewState();
         ShowToast(T("Current image state reset", "已重置当前图片状态"));
     }
@@ -1693,6 +2007,16 @@ public partial class MainWindow : Window
     private void ColorBlocksMode_Click(object sender, RoutedEventArgs e) => ApplyMode(AppMode.ColorBlocks);
 
     private void ColorPhotoMode_Click(object sender, RoutedEventArgs e) => ApplyMode(AppMode.ColorPhoto);
+
+    private void VideoFramesMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_videoTools.Available)
+        {
+            return;
+        }
+
+        ApplyMode(AppMode.VideoFrames);
+    }
 
     private void PauseTimer_Click(object sender, RoutedEventArgs e) => ToggleTimer();
 
@@ -2060,7 +2384,7 @@ public partial class MainWindow : Window
 
     private void ImageViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!IsImageMode || ActiveEntry is null)
+        if (!IsImageMode || (!IsVideoFrameMode && ActiveEntry is null))
         {
             return;
         }
@@ -2102,7 +2426,7 @@ public partial class MainWindow : Window
 
     private void ImageViewport_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (!IsImageMode || ActiveEntry is null)
+        if (!IsImageMode || (!IsVideoFrameMode && ActiveEntry is null))
         {
             return;
         }
@@ -2121,21 +2445,25 @@ public partial class MainWindow : Window
         }
 
         var menu = new ContextMenu();
-        menu.Items.Add(ContextItem(T("Previous Image", "上一张图片"), () => Navigate(-1)));
-        menu.Items.Add(ContextItem(T("Previous Image In Same Folder", "同文件夹上一张"), () => NavigateSameFolder(-1), ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem(T("Next Image In Same Folder", "同文件夹下一张"), () => NavigateSameFolder(1), ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem(T("Next Image", "下一张图片"), () => Navigate(1)));
+        menu.Items.Add(ContextItem(IsVideoFrameMode ? T("Previous Frame", "上一帧") : T("Previous Image", "上一张图片"), () => Navigate(-1)));
+        if (!IsVideoFrameMode)
+        {
+            menu.Items.Add(ContextItem(T("Previous Image In Same Folder", "同文件夹上一张"), () => NavigateSameFolder(-1), ActiveEntry?.IsFromArchive == false));
+            menu.Items.Add(ContextItem(T("Next Image In Same Folder", "同文件夹下一张"), () => NavigateSameFolder(1), ActiveEntry?.IsFromArchive == false));
+        }
+
+        menu.Items.Add(ContextItem(IsVideoFrameMode ? T("Next Frame", "下一帧") : T("Next Image", "下一张图片"), () => Navigate(1)));
         menu.Items.Add(new Separator());
-        menu.Items.Add(ContextItem(T("Copy Image", "复制图片"), CopyCurrentImage));
-        menu.Items.Add(ContextItem(T("Copy Image Path", "复制图片路径"), CopyCurrentImagePath));
-        menu.Items.Add(ContextItem(T("Show In File Explorer", "在文件资源管理器中显示"), RevealCurrentImage, ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem(T("Resample 30 Image Colors", "重新采样 30 个图片颜色"), SampleCurrentImageColors, ActiveEntry is not null));
+        menu.Items.Add(ContextItem(IsVideoFrameMode ? T("Copy Frame", "复制当前帧") : T("Copy Image", "复制图片"), CopyCurrentImage));
+        menu.Items.Add(ContextItem(IsVideoFrameMode ? T("Copy Video Path", "复制视频路径") : T("Copy Image Path", "复制图片路径"), CopyCurrentImagePath));
+        menu.Items.Add(ContextItem(T("Show In File Explorer", "在文件资源管理器中显示"), RevealCurrentImage, IsVideoFrameMode || ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem(T("Resample 30 Image Colors", "重新采样 30 个图片颜色"), SampleCurrentImageColors, IsVideoFrameMode || ActiveEntry is not null));
         menu.Items.Add(new Separator());
         menu.Items.Add(ContextItem(T("Flip Horizontal", "水平翻转"), ToggleFlipHorizontal));
         menu.Items.Add(ContextItem(T("Flip Vertical", "垂直翻转"), ToggleFlipVertical));
         menu.Items.Add(ContextItem(T("Rotate -90", "旋转 -90"), () => RotateCurrentImage(-90)));
         menu.Items.Add(ContextItem(T("Rotate +90", "旋转 +90"), () => RotateCurrentImage(90)));
-        menu.Items.Add(ContextItem(T("Reset Current Image State", "重置当前图片状态"), () => ResetImageView_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(IsVideoFrameMode ? T("Reset Current Video View", "重置当前视频视图") : T("Reset Current Image State", "重置当前图片状态"), () => ResetImageView_Click(this, new RoutedEventArgs())));
         menu.Items.Add(new Separator());
         menu.Items.Add(ContextItem(_state.StayOnTop ? T("Disable Stay On Top", "取消窗口置顶") : T("Stay On Top", "窗口置顶"), ToggleStayOnTop));
         menu.IsOpen = true;
@@ -2199,18 +2527,20 @@ public partial class MainWindow : Window
 
     private void CopyCurrentImagePath()
     {
-        if (ActiveEntry is null)
+        var path = IsVideoFrameMode ? ActiveModeState().ImageRootPath : ActiveEntry?.Path ?? "";
+        if (string.IsNullOrWhiteSpace(path))
         {
             return;
         }
 
-        System.Windows.Clipboard.SetText(ActiveEntry.Path);
-        ShowToast(T("Image path copied", "图片路径已复制"));
+        System.Windows.Clipboard.SetText(path);
+        ShowToast(IsVideoFrameMode ? T("Video path copied", "视频路径已复制") : T("Image path copied", "图片路径已复制"));
     }
 
     private void RevealCurrentImage()
     {
-        if (ActiveEntry is null || ActiveEntry.IsFromArchive)
+        var path = IsVideoFrameMode ? ActiveModeState().ImageRootPath : ActiveEntry?.Path ?? "";
+        if (string.IsNullOrWhiteSpace(path) || (!IsVideoFrameMode && ActiveEntry?.IsFromArchive == true))
         {
             return;
         }
@@ -2218,7 +2548,7 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo
         {
             FileName = "explorer.exe",
-            Arguments = "/select,\"" + ActiveEntry.Path + "\"",
+            Arguments = "/select,\"" + path + "\"",
             UseShellExecute = true
         });
     }
@@ -2246,12 +2576,12 @@ public partial class MainWindow : Window
 
     private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == Key.PageDown)
+        if (e.Key is Key.PageDown or Key.Right)
         {
             Navigate(1);
             e.Handled = true;
         }
-        else if (e.Key == Key.PageUp)
+        else if (e.Key is Key.PageUp or Key.Left)
         {
             Navigate(-1);
             e.Handled = true;
@@ -2281,6 +2611,7 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        CancelVideoFrameLoad();
         SaveCurrentImageViewState();
         if (WindowState == WindowState.Normal)
         {
@@ -2297,6 +2628,8 @@ public partial class MainWindow : Window
         }
 
         StateStore.Save(_state);
+        _videoFrameLoadCts.Dispose();
+        _videoFrameCache.Dispose();
         _imageLibrary.Dispose();
     }
 }
