@@ -5,6 +5,7 @@ using System.IO;
 using System.Media;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
@@ -239,10 +240,8 @@ public partial class MainWindow : Window
         item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
         item.IsCheckable = false;
         item.IsChecked = false;
-        item.BorderBrush = isChecked
-            ? (System.Windows.Media.Brush)Resources["AccentBrush"]
-            : System.Windows.Media.Brushes.Transparent;
-        item.BorderThickness = isChecked && !isTopLevel ? new Thickness(3, 0, 0, 0) : new Thickness(0);
+        item.BorderBrush = System.Windows.Media.Brushes.Transparent;
+        item.BorderThickness = new Thickness(0);
         item.Icon = isTopLevel ? null : CreateMenuCheckIcon(isChecked);
         item.Padding = isTopLevel ? new Thickness(10, 4, 10, 4) : new Thickness(10, 6, 10, 6);
         item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentHoverBrush"];
@@ -283,9 +282,12 @@ public partial class MainWindow : Window
     {
         var container = new Grid
         {
-            Width = 16,
+            Width = 18,
             Height = 16,
-            Margin = new Thickness(0, 0, 4, 0)
+            Margin = new Thickness(0, 0, 6, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+            VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            SnapsToDevicePixels = true
         };
 
         if (!isChecked)
@@ -295,12 +297,19 @@ public partial class MainWindow : Window
 
         var check = new System.Windows.Shapes.Path
         {
-            Data = Geometry.Parse("M 3 8.5 L 6.5 12 L 13 4"),
+            Data = Geometry.Parse("M 2 6 L 5 9 L 11 2"),
             Stroke = (System.Windows.Media.Brush)Resources["AccentBrush"],
-            StrokeThickness = 2.2,
+            StrokeThickness = 2,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
-            StrokeLineJoin = PenLineJoin.Round
+            StrokeLineJoin = PenLineJoin.Round,
+            Width = 13,
+            Height = 11,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+            VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            Margin = new Thickness(0, 1, 0, 0),
+            SnapsToDevicePixels = true
         };
         container.Children.Add(check);
         return container;
@@ -313,9 +322,48 @@ public partial class MainWindow : Window
             return;
         }
 
+        Dispatcher.BeginInvoke(() => ApplySubmenuPopupTheme(item), DispatcherPriority.Loaded);
         foreach (var child in EnumerateMenuItems(item.Items))
         {
             StyleMenuItem(child);
+        }
+    }
+
+    private void ApplySubmenuPopupTheme(MenuItem item)
+    {
+        if (item.Template?.FindName("PART_Popup", item) is not Popup popup ||
+            popup.Child is not DependencyObject popupChild)
+        {
+            return;
+        }
+
+        var border = popupChild as Border ?? FindVisualChildren<Border>(popupChild).FirstOrDefault();
+        if (border is null)
+        {
+            return;
+        }
+
+        border.BorderBrush = (System.Windows.Media.Brush)Resources["AccentBrush"];
+        border.BorderThickness = new Thickness(1);
+        border.Background = (System.Windows.Media.Brush)Resources["PanelBrush"];
+        border.SnapsToDevicePixels = true;
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
+    {
+        var childCount = VisualTreeHelper.GetChildrenCount(parent);
+        for (var i = 0; i < childCount; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T typedChild)
+            {
+                yield return typedChild;
+            }
+
+            foreach (var nestedChild in FindVisualChildren<T>(child))
+            {
+                yield return nestedChild;
+            }
         }
     }
 
