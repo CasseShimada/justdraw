@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<AppMode, BitmapImage?> _sourceBitmapByMode = [];
     private readonly Dictionary<AppMode, BitmapSource?> _displayBitmapByMode = [];
     private readonly HashSet<AppMode> _loadedSources = [];
+    private readonly HashSet<AppMode> _autoPromptedSourceModes = [];
     private readonly List<MediaColor> _palette = [];
     private readonly List<MediaColor> _sampledImageColors = [];
     private readonly Dictionary<MenuItem, bool> _menuCheckedStates = [];
@@ -55,6 +56,8 @@ public partial class MainWindow : Window
     private int _overtimeSeconds;
     private int _countdownRemaining;
     private bool _isDraggingImage;
+    private bool _sourceSelectionPromptQueued;
+    private bool _sourceSelectionPromptOpen;
     private WpfPoint _dragStart;
     private double _dragStartOffsetX;
     private double _dragStartOffsetY;
@@ -535,20 +538,54 @@ public partial class MainWindow : Window
             Top = Math.Max(SystemParameters.WorkArea.Top, Math.Min(Top, SystemParameters.WorkArea.Bottom - ActualHeight));
         }
 
-        if (IsImageLibraryMode && string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
-        {
-            Dispatcher.BeginInvoke(new Action(PromptForInitialImageFolder), DispatcherPriority.ApplicationIdle);
-        }
+        QueueSourceSelectionIfNeeded();
     }
 
-    private void PromptForInitialImageFolder()
+    private void QueueSourceSelectionIfNeeded()
     {
-        if (!IsImageLibraryMode || !string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
+        if (!IsLoaded || _sourceSelectionPromptQueued || _sourceSelectionPromptOpen || _autoPromptedSourceModes.Contains(_state.AppMode) || !NeedsSourceSelection())
         {
             return;
         }
 
-        SetImageFolder_Click(this, new RoutedEventArgs());
+        _sourceSelectionPromptQueued = true;
+        Dispatcher.BeginInvoke(new Action(PromptForSourceSelectionIfNeeded), DispatcherPriority.ApplicationIdle);
+    }
+
+    private void PromptForSourceSelectionIfNeeded()
+    {
+        _sourceSelectionPromptQueued = false;
+        if (_sourceSelectionPromptOpen || !NeedsSourceSelection())
+        {
+            return;
+        }
+
+        _sourceSelectionPromptOpen = true;
+        _autoPromptedSourceModes.Add(_state.AppMode);
+        try
+        {
+            SetImageFolder_Click(this, new RoutedEventArgs());
+        }
+        finally
+        {
+            _sourceSelectionPromptOpen = false;
+        }
+    }
+
+    private bool NeedsSourceSelection()
+    {
+        if (!IsImageMode)
+        {
+            return false;
+        }
+
+        var source = ActiveModeState().ImageRootPath;
+        if (IsVideoFrameMode)
+        {
+            return _videoTools.Available && (string.IsNullOrWhiteSpace(source) || !File.Exists(source));
+        }
+
+        return IsImageLibraryMode && (string.IsNullOrWhiteSpace(source) || (!Directory.Exists(source) && !File.Exists(source)));
     }
 
     private void ApplyIcon()
@@ -688,7 +725,13 @@ public partial class MainWindow : Window
     private void ApplyMode(AppMode mode)
     {
         SaveCurrentImageViewState();
+        var previousMode = _state.AppMode;
         _state.AppMode = mode;
+        if (previousMode != mode)
+        {
+            _autoPromptedSourceModes.Remove(mode);
+        }
+
         PhotoSwitchingPage.Visibility = mode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
         ColorBlocksPage.Visibility = mode == AppMode.ColorBlocks ? Visibility.Visible : Visibility.Collapsed;
         ColorPhotoPage.Visibility = mode == AppMode.ColorPhoto ? Visibility.Visible : Visibility.Collapsed;
@@ -729,6 +772,7 @@ public partial class MainWindow : Window
         }
 
         UpdateAllUi();
+        QueueSourceSelectionIfNeeded();
     }
 
     private void RefreshActiveView()
@@ -753,6 +797,7 @@ public partial class MainWindow : Window
     {
         var modeState = ActiveModeState();
         modeState.ImageRootPath = sourcePath;
+        _autoPromptedSourceModes.Remove(_state.AppMode);
         modeState.ImageOrder.Clear();
         _loadedSources.Remove(_state.AppMode);
         LoadSourceForMode(_state.AppMode, showToast: true);
@@ -786,6 +831,7 @@ public partial class MainWindow : Window
             var modeState = _state.GetModeState(AppMode.VideoFrames);
             var previousSource = modeState.ImageRootPath;
             modeState.ImageRootPath = sourcePath;
+            _autoPromptedSourceModes.Remove(AppMode.VideoFrames);
             modeState.LastImagePath = sourcePath;
             modeState.VideoFrameIndex = string.Equals(previousSource, sourcePath, StringComparison.OrdinalIgnoreCase)
                 ? Math.Clamp(modeState.VideoFrameIndex, 0, info.FrameCount - 1)
