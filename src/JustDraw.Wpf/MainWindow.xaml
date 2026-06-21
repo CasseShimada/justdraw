@@ -1,10 +1,11 @@
 <Window x:Class="JustDraw.Wpf.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Just Draw!" Height="1120" Width="840"
-        MinHeight="360" MinWidth="360"
+        Title="Just Draw!" Height="760" Width="640"
+        MinHeight="320" MinWidth="320"
         Background="Black"
         WindowStartupLocation="CenterScreen"
+        Loaded="Window_Loaded"
         Closing="Window_Closing"
         KeyDown="Window_KeyDown"
         SizeChanged="Window_SizeChanged">
@@ -27,63 +28,63 @@
     <DockPanel LastChildFill="True">
         <Menu x:Name="TopMenu" DockPanel.Dock="Top">
             <MenuItem Header="File" x:Name="FileMenu">
-                <MenuItem Header="Set Image Folder..." Click="SetImageFolder_Click" />
+                <MenuItem x:Name="SetImageFolderItem" Header="Set Image Folder..." Click="SetImageFolder_Click" />
                 <MenuItem Header="Recent Paths" x:Name="RecentPathsMenu" />
-                <MenuItem Header="Delete Path Playback State..." Click="DeletePathPlaybackState_Click" />
-                <MenuItem Header="Refresh List Order + Random Image" Click="RefreshRandom_Click" />
-                <MenuItem Header="Reset Current Image State" Click="ResetImageView_Click" />
-                <MenuItem Header="Reset Current Path Image States" Click="ResetCurrentPathImageStates_Click" />
+                <MenuItem x:Name="DeletePathPlaybackStateItem" Header="Delete Path Playback State..." Click="DeletePathPlaybackState_Click" />
+                <MenuItem x:Name="RefreshRandomItem" Header="Refresh List Order + Random Image" Click="RefreshRandom_Click" />
+                <MenuItem x:Name="ResetCurrentImageStateItem" Header="Reset Current Image State" Click="ResetImageView_Click" />
+                <MenuItem x:Name="ResetCurrentPathImageStatesItem" Header="Reset Current Path Image States" Click="ResetCurrentPathImageStates_Click" />
                 <Separator />
-                <MenuItem Header="Exit" Click="Exit_Click" />
+                <MenuItem x:Name="ExitItem" Header="Exit" Click="Exit_Click" />
             </MenuItem>
-            <MenuItem Header="Window">
+            <MenuItem x:Name="WindowMenu" Header="Window">
                 <MenuItem x:Name="ProtectedVideoExportItem" Header="Protected Video Export..." Click="ProtectedVideoExport_Click" />
             </MenuItem>
-            <MenuItem Header="Mode">
+            <MenuItem x:Name="ModeMenu" Header="Mode">
                 <MenuItem x:Name="PhotoSwitchingModeItem" Header="Photo Switching" Click="PhotoSwitchingMode_Click" />
                 <MenuItem x:Name="ColorBlocksModeItem" Header="Color Blocks" Click="ColorBlocksMode_Click" />
                 <MenuItem x:Name="ColorPhotoModeItem" Header="Color Photo" Click="ColorPhotoMode_Click" />
             </MenuItem>
             <MenuItem Header="Timer" x:Name="TimerMenu">
                 <MenuItem x:Name="PauseTimerItem" Header="Pause Timer" Click="PauseTimer_Click" />
-                <MenuItem Header="Set Timer..." Click="SetTimer_Click" />
-                <MenuItem Header="Reset Timer" Click="ResetTimer_Click" />
+                <MenuItem x:Name="SetTimerItem" Header="Set Timer..." Click="SetTimer_Click" />
+                <MenuItem x:Name="ResetTimerItem" Header="Reset Timer" Click="ResetTimer_Click" />
                 <MenuItem x:Name="RandomPlayItem" Header="Random Play" Click="RandomPlay_Click" />
                 <MenuItem x:Name="PrestartCountdownItem" Header="3-second Pre-start Countdown" Click="PrestartCountdown_Click" />
                 <MenuItem x:Name="TimerNotificationItem" Header="Timer Finish Notification" Click="TimerNotification_Click" />
-                <MenuItem Header="Timer End Mode">
+                <MenuItem x:Name="TimerEndModeMenu" Header="Timer End Mode">
                     <MenuItem x:Name="TimerAutoNextItem" Header="Auto Next Image" Click="TimerAutoNext_Click" />
                     <MenuItem x:Name="TimerHoldItem" Header="Stay On Current Image" Click="TimerHold_Click" />
                     <MenuItem x:Name="TimerOvertimeItem" Header="Overtime Count Up" Click="TimerOvertime_Click" />
                 </MenuItem>
             </MenuItem>
             <MenuItem Header="Color Sense Tools" x:Name="ColorToolsMenu">
-                <MenuItem Header="Increase Colors" Click="IncreaseColors_Click" />
-                <MenuItem Header="Decrease Colors" Click="DecreaseColors_Click" />
-                <MenuItem Header="Refresh Colors" Click="RefreshColors_Click" />
+                <MenuItem x:Name="IncreaseColorsItem" Header="Increase Colors" Click="IncreaseColors_Click" />
+                <MenuItem x:Name="DecreaseColorsItem" Header="Decrease Colors" Click="DecreaseColors_Click" />
+                <MenuItem x:Name="RefreshColorsItem" Header="Refresh Colors" Click="RefreshColors_Click" />
                 <MenuItem x:Name="ShapeModeItem" Header="Shape Mode" Click="ShapeMode_Click" />
-                <MenuItem Header="Set Min Luma..." Click="SetMinLuma_Click" />
-                <MenuItem Header="Set Max Luma..." Click="SetMaxLuma_Click" />
-                <MenuItem Header="Set Min Saturation..." Click="SetMinSaturation_Click" />
+                <MenuItem x:Name="SetMinLumaItem" Header="Set Min Luma..." Click="SetMinLuma_Click" />
+                <MenuItem x:Name="SetMaxLumaItem" Header="Set Max Luma..." Click="SetMaxLuma_Click" />
+                <MenuItem x:Name="SetMinSaturationItem" Header="Set Min Saturation..." Click="SetMinSaturation_Click" />
                 <Separator />
-                <MenuItem Header="Copy Colors" Click="CopyColors_Click" />
+                <MenuItem x:Name="CopyColorsItem" Header="Copy Colors" Click="CopyColors_Click" />
             </MenuItem>
             <MenuItem Header="Mosaic" x:Name="MosaicMenu">
                 <MenuItem x:Name="MosaicEnabledItem" Header="Enable Mosaic" Click="MosaicEnabled_Click" />
-                <MenuItem Header="Mosaic Size">
-                    <MenuItem Header="Small" Click="MosaicSmall_Click" />
-                    <MenuItem Header="Medium" Click="MosaicMedium_Click" />
-                    <MenuItem Header="Large" Click="MosaicLarge_Click" />
+                <MenuItem x:Name="MosaicSizeMenu" Header="Mosaic Size">
+                    <MenuItem x:Name="MosaicSmallItem" Header="Small" Click="MosaicSmall_Click" />
+                    <MenuItem x:Name="MosaicMediumItem" Header="Medium" Click="MosaicMedium_Click" />
+                    <MenuItem x:Name="MosaicLargeItem" Header="Large" Click="MosaicLarge_Click" />
                 </MenuItem>
             </MenuItem>
-            <MenuItem Header="Settings">
+            <MenuItem x:Name="SettingsMenu" Header="Settings">
                 <MenuItem x:Name="StayOnTopItem" Header="Stay On Top" Click="StayOnTop_Click" />
-                <MenuItem Header="Language">
+                <MenuItem x:Name="LanguageMenu" Header="Language">
                     <MenuItem x:Name="EnglishLanguageItem" Header="English" Click="EnglishLanguage_Click" />
                     <MenuItem x:Name="ChineseLanguageItem" Header="Chinese" Click="ChineseLanguage_Click" />
                 </MenuItem>
-                <MenuItem Header="Check For Updates" Click="CheckForUpdates_Click" />
-                <MenuItem Header="Update Proxy..." Click="UpdateProxy_Click" />
+                <MenuItem x:Name="CheckForUpdatesItem" Header="Check For Updates" Click="CheckForUpdates_Click" />
+                <MenuItem x:Name="UpdateProxyItem" Header="Update Proxy..." Click="UpdateProxy_Click" />
                 <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
                 <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />
                 <MenuItem x:Name="SampleImageColorsItem" Header="Sample 30 Image Colors" Click="SampleImageColors_Click" />

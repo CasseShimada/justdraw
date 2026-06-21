@@ -43,8 +43,8 @@ public sealed class ModeState
 
 public sealed class JustDrawState
 {
-    public int WindowWidth { get; set; } = 840;
-    public int WindowHeight { get; set; } = 1120;
+    public int WindowWidth { get; set; } = 640;
+    public int WindowHeight { get; set; } = 760;
     public AppMode AppMode { get; set; } = AppMode.PhotoSwitching;
     public bool StayOnTop { get; set; }
     public bool LockImageViewportAspectRatio { get; set; }

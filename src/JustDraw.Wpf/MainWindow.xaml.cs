@@ -59,8 +59,7 @@ public partial class MainWindow : Window
         _state = StateStore.Load();
         InitializeComponent();
         ApplyIcon();
-        Width = _state.WindowWidth;
-        Height = _state.WindowHeight;
+        ApplySafeStartupSize();
         Topmost = _state.StayOnTop;
         _timer.Tick += Timer_Tick;
         _toastTimer.Tick += (_, _) => Toast.Visibility = Visibility.Collapsed;
@@ -114,6 +113,39 @@ public partial class MainWindow : Window
     private string T(string en, string zh) => IsChinese ? zh : en;
 
     private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
+
+    private void ApplySafeStartupSize()
+    {
+        var workArea = SystemParameters.WorkArea;
+        var maxWidth = Math.Max(320, workArea.Width - 40);
+        var maxHeight = Math.Max(320, workArea.Height - 40);
+        Width = Math.Clamp(_state.WindowWidth, 320, maxWidth);
+        Height = Math.Clamp(_state.WindowHeight, 320, maxHeight);
+    }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (WindowState == WindowState.Normal)
+        {
+            Left = Math.Max(SystemParameters.WorkArea.Left, Math.Min(Left, SystemParameters.WorkArea.Right - ActualWidth));
+            Top = Math.Max(SystemParameters.WorkArea.Top, Math.Min(Top, SystemParameters.WorkArea.Bottom - ActualHeight));
+        }
+
+        if (IsImageMode && string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
+        {
+            Dispatcher.BeginInvoke(new Action(PromptForInitialImageFolder), DispatcherPriority.ApplicationIdle);
+        }
+    }
+
+    private void PromptForInitialImageFolder()
+    {
+        if (!IsImageMode || !string.IsNullOrWhiteSpace(ActiveModeState().ImageRootPath))
+        {
+            return;
+        }
+
+        SetImageFolder_Click(this, new RoutedEventArgs());
+    }
 
     private void ApplyIcon()
     {
@@ -727,6 +759,55 @@ public partial class MainWindow : Window
     private void ApplyLanguage()
     {
         Title = T("Just Draw!", "Just Draw!");
+        FileMenu.Header = T("File", "文件");
+        SetImageFolderItem.Header = T("Set Image Folder...", "选择图片文件夹...");
+        RecentPathsMenu.Header = T("Recent Paths", "最近路径");
+        DeletePathPlaybackStateItem.Header = T("Delete Path Playback State...", "删除路径播放状态...");
+        RefreshRandomItem.Header = T("Refresh List Order + Random Image", "刷新顺序并随机图片");
+        ResetCurrentImageStateItem.Header = T("Reset Current Image State", "重置当前图片状态");
+        ResetCurrentPathImageStatesItem.Header = T("Reset Current Path Image States", "重置当前路径图片状态");
+        ExitItem.Header = T("Exit", "退出");
+        WindowMenu.Header = T("Window", "窗口");
+        ProtectedVideoExportItem.Header = T("Protected Video Export...", "受保护视频导出...");
+        ModeMenu.Header = T("Mode", "模式");
+        PhotoSwitchingModeItem.Header = T("Photo Switching", "图片切换");
+        ColorBlocksModeItem.Header = T("Color Blocks", "色块练习");
+        ColorPhotoModeItem.Header = T("Color Photo", "色彩照片");
+        TimerMenu.Header = T("Timer", "计时器");
+        SetTimerItem.Header = T("Set Timer...", "设置计时...");
+        ResetTimerItem.Header = T("Reset Timer", "重置计时");
+        RandomPlayItem.Header = T("Random Play", "随机播放");
+        PrestartCountdownItem.Header = T("3-second Pre-start Countdown", "3 秒预倒计时");
+        TimerNotificationItem.Header = T("Timer Finish Notification", "计时结束通知");
+        TimerEndModeMenu.Header = T("Timer End Mode", "计时结束模式");
+        TimerAutoNextItem.Header = T("Auto Next Image", "自动下一张");
+        TimerHoldItem.Header = T("Stay On Current Image", "停在当前图片");
+        TimerOvertimeItem.Header = T("Overtime Count Up", "超时正计时");
+        ColorToolsMenu.Header = T("Color Sense Tools", "色感工具");
+        IncreaseColorsItem.Header = T("Increase Colors", "增加颜色");
+        DecreaseColorsItem.Header = T("Decrease Colors", "减少颜色");
+        RefreshColorsItem.Header = T("Refresh Colors", "刷新颜色");
+        ShapeModeItem.Header = T("Shape Mode", "形状模式");
+        SetMinLumaItem.Header = T("Set Min Luma...", "设置最低亮度...");
+        SetMaxLumaItem.Header = T("Set Max Luma...", "设置最高亮度...");
+        SetMinSaturationItem.Header = T("Set Min Saturation...", "设置最低饱和度...");
+        CopyColorsItem.Header = T("Copy Colors", "复制颜色");
+        MosaicMenu.Header = T("Mosaic", "马赛克");
+        MosaicEnabledItem.Header = T("Enable Mosaic", "启用马赛克");
+        MosaicSizeMenu.Header = T("Mosaic Size", "马赛克尺寸");
+        MosaicSmallItem.Header = T("Small", "小");
+        MosaicMediumItem.Header = T("Medium", "中");
+        MosaicLargeItem.Header = T("Large", "大");
+        SettingsMenu.Header = T("Settings", "设置");
+        StayOnTopItem.Header = T("Stay On Top", "窗口置顶");
+        LanguageMenu.Header = T("Language", "语言");
+        EnglishLanguageItem.Header = T("English", "英文");
+        ChineseLanguageItem.Header = T("Chinese", "中文");
+        CheckForUpdatesItem.Header = T("Check For Updates", "检查更新");
+        UpdateProxyItem.Header = T("Update Proxy...", "更新代理...");
+        LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
+        GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
+        SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
         PhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
         ColorPhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
         ColorCountText.Text = T("Colors: ", "颜色数：") + Math.Max(1, _palette.Count);
@@ -1240,7 +1321,7 @@ public partial class MainWindow : Window
 
     private void SetTimer_Click(object sender, RoutedEventArgs e)
     {
-        var input = Microsoft.VisualBasic.Interaction.InputBox("Set seconds", "Timer", ActiveModeState().TimerSeconds.ToString());
+        var input = Microsoft.VisualBasic.Interaction.InputBox(T("Set seconds", "设置秒数"), T("Timer", "计时器"), ActiveModeState().TimerSeconds.ToString());
         if (!int.TryParse(input, out var seconds) || seconds <= 0)
         {
             return;
@@ -1264,7 +1345,7 @@ public partial class MainWindow : Window
     private void RandomPlay_Click(object sender, RoutedEventArgs e)
     {
         ActiveModeState().RandomPlayMode = !ActiveModeState().RandomPlayMode;
-        ShowToast(ActiveModeState().RandomPlayMode ? "Random mode enabled" : "Sequence mode enabled");
+        ShowToast(ActiveModeState().RandomPlayMode ? T("Random mode enabled", "已启用随机模式") : T("Sequence mode enabled", "已启用顺序模式"));
         UpdateAllUi();
     }
 
@@ -1414,7 +1495,7 @@ public partial class MainWindow : Window
     {
         _state.MosaicDownsampleFactor = size;
         ApplyImageEffects();
-        ShowToast("Mosaic size updated");
+        ShowToast(T("Mosaic size updated", "马赛克尺寸已更新"));
     }
 
     private void StayOnTop_Click(object sender, RoutedEventArgs e)
@@ -1571,36 +1652,36 @@ public partial class MainWindow : Window
         }
 
         var menu = new ContextMenu();
-        menu.Items.Add(ContextItem("Previous Image", () => Navigate(-1)));
-        menu.Items.Add(ContextItem("Previous Image In Same Folder", () => NavigateSameFolder(-1), ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem("Next Image In Same Folder", () => NavigateSameFolder(1), ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem("Next Image", () => Navigate(1)));
+        menu.Items.Add(ContextItem(T("Previous Image", "上一张图片"), () => Navigate(-1)));
+        menu.Items.Add(ContextItem(T("Previous Image In Same Folder", "同文件夹上一张"), () => NavigateSameFolder(-1), ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem(T("Next Image In Same Folder", "同文件夹下一张"), () => NavigateSameFolder(1), ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem(T("Next Image", "下一张图片"), () => Navigate(1)));
         menu.Items.Add(new Separator());
-        menu.Items.Add(ContextItem("Copy Image", CopyCurrentImage));
-        menu.Items.Add(ContextItem("Copy Image Path", CopyCurrentImagePath));
-        menu.Items.Add(ContextItem("Show In File Explorer", RevealCurrentImage, ActiveEntry?.IsFromArchive == false));
-        menu.Items.Add(ContextItem("Resample 30 Image Colors", SampleCurrentImageColors, ActiveEntry is not null));
+        menu.Items.Add(ContextItem(T("Copy Image", "复制图片"), CopyCurrentImage));
+        menu.Items.Add(ContextItem(T("Copy Image Path", "复制图片路径"), CopyCurrentImagePath));
+        menu.Items.Add(ContextItem(T("Show In File Explorer", "在文件资源管理器中显示"), RevealCurrentImage, ActiveEntry?.IsFromArchive == false));
+        menu.Items.Add(ContextItem(T("Resample 30 Image Colors", "重新采样 30 个图片颜色"), SampleCurrentImageColors, ActiveEntry is not null));
         menu.Items.Add(new Separator());
-        menu.Items.Add(ContextItem("Flip Horizontal", ToggleFlipHorizontal));
-        menu.Items.Add(ContextItem("Flip Vertical", ToggleFlipVertical));
-        menu.Items.Add(ContextItem("Rotate -90", () => RotateCurrentImage(-90)));
-        menu.Items.Add(ContextItem("Rotate +90", () => RotateCurrentImage(90)));
-        menu.Items.Add(ContextItem("Reset Current Image State", () => ResetImageView_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(T("Flip Horizontal", "水平翻转"), ToggleFlipHorizontal));
+        menu.Items.Add(ContextItem(T("Flip Vertical", "垂直翻转"), ToggleFlipVertical));
+        menu.Items.Add(ContextItem(T("Rotate -90", "旋转 -90"), () => RotateCurrentImage(-90)));
+        menu.Items.Add(ContextItem(T("Rotate +90", "旋转 +90"), () => RotateCurrentImage(90)));
+        menu.Items.Add(ContextItem(T("Reset Current Image State", "重置当前图片状态"), () => ResetImageView_Click(this, new RoutedEventArgs())));
         menu.Items.Add(new Separator());
-        menu.Items.Add(ContextItem(_state.StayOnTop ? "Disable Stay On Top" : "Stay On Top", ToggleStayOnTop));
+        menu.Items.Add(ContextItem(_state.StayOnTop ? T("Disable Stay On Top", "取消窗口置顶") : T("Stay On Top", "窗口置顶"), ToggleStayOnTop));
         menu.IsOpen = true;
     }
 
     private void ColorBlocksPage_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
         var menu = new ContextMenu();
-        menu.Items.Add(ContextItem("Refresh Colors", () => RefreshColors_Click(this, new RoutedEventArgs())));
-        menu.Items.Add(ContextItem("Increase Colors", () => IncreaseColors_Click(this, new RoutedEventArgs())));
-        menu.Items.Add(ContextItem("Decrease Colors", () => DecreaseColors_Click(this, new RoutedEventArgs())));
-        menu.Items.Add(ContextItem("Shape Mode", () => ShapeMode_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(T("Refresh Colors", "刷新颜色"), () => RefreshColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(T("Increase Colors", "增加颜色"), () => IncreaseColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(T("Decrease Colors", "减少颜色"), () => DecreaseColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(T("Shape Mode", "形状模式"), () => ShapeMode_Click(this, new RoutedEventArgs())));
         menu.Items.Add(new Separator());
-        menu.Items.Add(ContextItem("Copy Colors", () => CopyColors_Click(this, new RoutedEventArgs())));
-        menu.Items.Add(ContextItem(_state.StayOnTop ? "Disable Stay On Top" : "Stay On Top", ToggleStayOnTop));
+        menu.Items.Add(ContextItem(T("Copy Colors", "复制颜色"), () => CopyColors_Click(this, new RoutedEventArgs())));
+        menu.Items.Add(ContextItem(_state.StayOnTop ? T("Disable Stay On Top", "取消窗口置顶") : T("Stay On Top", "窗口置顶"), ToggleStayOnTop));
         menu.IsOpen = true;
     }
 
@@ -1643,7 +1724,7 @@ public partial class MainWindow : Window
         if (_displayBitmapByMode.TryGetValue(_state.AppMode, out var bitmap) && bitmap is not null)
         {
             System.Windows.Clipboard.SetImage(bitmap);
-            ShowToast("Image copied");
+            ShowToast(T("Image copied", "图片已复制"));
         }
     }
 
@@ -1655,7 +1736,7 @@ public partial class MainWindow : Window
         }
 
         System.Windows.Clipboard.SetText(ActiveEntry.Path);
-        ShowToast("Image path copied");
+        ShowToast(T("Image path copied", "图片路径已复制"));
     }
 
     private void RevealCurrentImage()
