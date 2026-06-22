@@ -49,8 +49,13 @@ public partial class MainWindow : Window
     private bool _timerPaused = true;
     private bool _timerExpiredHold;
     private bool _updateBusy;
+    private bool _updateAvailable;
     private bool _videoExportBusy;
+    private bool _isClosing;
     private int _videoFrameLoadVersion;
+    private int _displayedVideoFrameIndex = -1;
+    private int _loadingVideoFrameIndex = -1;
+    private bool _videoFrameRequestActive;
     private CancellationTokenSource _videoFrameLoadCts = new();
     private int _timerRemaining;
     private int _overtimeSeconds;
@@ -368,13 +373,20 @@ public partial class MainWindow : Window
     private void StyleMenuItem(MenuItem item)
     {
         var isChecked = _menuCheckedStates.TryGetValue(item, out var checkedState) && checkedState;
+        var isUpdatePrompt = IsUpdatePromptItem(item);
         var isTopLevel = item.Parent is Menu;
-        item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
-        item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
+        item.Background = isUpdatePrompt
+            ? (System.Windows.Media.Brush)Resources["AccentSoftBrush"]
+            : DefaultMenuItemBackground(item);
+        item.Foreground = isUpdatePrompt
+            ? (System.Windows.Media.Brush)Resources["AccentArrowBrush"]
+            : (System.Windows.Media.Brush)Resources["TextBrush"];
         item.IsCheckable = false;
         item.IsChecked = false;
-        item.BorderBrush = System.Windows.Media.Brushes.Transparent;
-        item.BorderThickness = new Thickness(0);
+        item.BorderBrush = isUpdatePrompt
+            ? (System.Windows.Media.Brush)Resources["AccentBrush"]
+            : System.Windows.Media.Brushes.Transparent;
+        item.BorderThickness = isUpdatePrompt ? new Thickness(1) : new Thickness(0);
         item.Icon = isTopLevel ? null : CreateMenuCheckIcon(isChecked);
         item.Padding = isTopLevel ? new Thickness(10, 4, 10, 4) : new Thickness(10, 6, 10, 6);
         item.Resources[System.Windows.SystemColors.HighlightBrushKey] = Resources["AccentHoverBrush"];
@@ -411,7 +423,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        item.Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"];
+        if (IsUpdatePromptItem(item))
+        {
+            item.Background = (System.Windows.Media.Brush)Resources["AccentSoftBrush"];
+            item.Foreground = (System.Windows.Media.Brush)Resources["AccentArrowBrush"];
+            return;
+        }
+
+        item.Background = DefaultMenuItemBackground(item);
         item.Foreground = (System.Windows.Media.Brush)Resources["TextBrush"];
     }
 
@@ -422,6 +441,13 @@ public partial class MainWindow : Window
         separator.Margin = new Thickness(28, 5, 8, 5);
         separator.Height = 1;
     }
+
+    private bool IsUpdatePromptItem(MenuItem item) => _updateAvailable && (item == SettingsMenu || item == CheckForUpdatesItem);
+
+    private System.Windows.Media.Brush DefaultMenuItemBackground(MenuItem item) =>
+        item.Parent is Menu
+            ? (System.Windows.Media.Brush)Resources["SurfaceBrush"]
+            : (System.Windows.Media.Brush)Resources["PanelBrush"];
 
     private FrameworkElement CreateMenuCheckIcon(bool isChecked)
     {
@@ -786,7 +812,7 @@ public partial class MainWindow : Window
 
         if (IsVideoFrameMode)
         {
-            _ = LoadCurrentVideoFrameAsync();
+            RequestVideoFrameDisplay();
             return;
         }
 
@@ -840,6 +866,7 @@ public partial class MainWindow : Window
             _entriesByMode.Remove(AppMode.VideoFrames);
             _sourceBitmapByMode.Remove(AppMode.VideoFrames);
             _displayBitmapByMode.Remove(AppMode.VideoFrames);
+            _displayedVideoFrameIndex = -1;
             _loadedSources.Add(AppMode.VideoFrames);
             RememberRecentPath(modeState, sourcePath);
             if (showToast)
@@ -849,7 +876,7 @@ public partial class MainWindow : Window
 
             if (IsVideoFrameMode)
             {
-                await LoadCurrentVideoFrameAsync();
+                RequestVideoFrameDisplay();
             }
         }
         catch (Exception ex)
@@ -862,11 +889,78 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task LoadCurrentVideoFrameAsync()
+    private void RequestVideoFrameDisplay()
     {
-        if (!IsVideoFrameMode)
+        if (_isClosing || !IsVideoFrameMode)
         {
             return;
+        }
+
+        var targetIndex = NormalizeTargetVideoFrameIndex();
+        if (targetIndex < 0)
+        {
+            return;
+        }
+
+        if (targetIndex != _displayedVideoFrameIndex && targetIndex != _loadingVideoFrameIndex)
+        {
+            _videoFrameLoadCts.Cancel();
+        }
+
+        if (_videoFrameRequestActive)
+        {
+            return;
+        }
+
+        _videoFrameRequestActive = true;
+        _ = ProcessVideoFrameRequestsAsync();
+    }
+
+    private async Task ProcessVideoFrameRequestsAsync()
+    {
+        var canRestart = true;
+        try
+        {
+            while (!_isClosing && IsVideoFrameMode)
+            {
+                var targetIndex = NormalizeTargetVideoFrameIndex();
+                if (targetIndex < 0 || targetIndex == _displayedVideoFrameIndex)
+                {
+                    break;
+                }
+
+                var loaded = await LoadTargetVideoFrameAsync(targetIndex);
+                if (!loaded)
+                {
+                    canRestart = NormalizeTargetVideoFrameIndex() != targetIndex;
+                    break;
+                }
+
+                if (NormalizeTargetVideoFrameIndex() == _displayedVideoFrameIndex)
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _videoFrameRequestActive = false;
+            if (canRestart &&
+                !_isClosing &&
+                IsVideoFrameMode &&
+                NormalizeTargetVideoFrameIndex() >= 0 &&
+                NormalizeTargetVideoFrameIndex() != _displayedVideoFrameIndex)
+            {
+                RequestVideoFrameDisplay();
+            }
+        }
+    }
+
+    private int NormalizeTargetVideoFrameIndex()
+    {
+        if (_isClosing || !IsVideoFrameMode)
+        {
+            return -1;
         }
 
         var video = _videoFrameCache.CurrentVideo;
@@ -876,30 +970,45 @@ public partial class MainWindow : Window
             VideoFrameEmptyText.Visibility = Visibility.Visible;
             VideoFrameBadge.Visibility = Visibility.Collapsed;
             ClearSampledImageColors();
-            return;
+            _displayedVideoFrameIndex = -1;
+            _loadingVideoFrameIndex = -1;
+            return -1;
         }
 
         var modeState = ActiveModeState();
         var frameIndex = Math.Clamp(modeState.VideoFrameIndex, 0, video.FrameCount - 1);
         modeState.VideoFrameIndex = frameIndex;
         CurrentIndex = frameIndex;
+        return frameIndex;
+    }
+
+    private async Task<bool> LoadTargetVideoFrameAsync(int frameIndex)
+    {
+        var video = _videoFrameCache.CurrentVideo;
+        if (_isClosing || !IsVideoFrameMode || video is null)
+        {
+            return false;
+        }
+
         var version = ++_videoFrameLoadVersion;
         _videoFrameLoadCts.Cancel();
         _videoFrameLoadCts = new CancellationTokenSource();
         var token = _videoFrameLoadCts.Token;
-        VideoFrameText.Text = T("Loading frame ", "正在载入帧 ") + (frameIndex + 1).ToString(CultureInfo.InvariantCulture);
+        _loadingVideoFrameIndex = frameIndex;
+        VideoFrameText.Text = T("Loading frame ", "正在载入帧 ") + (frameIndex + 1).ToString(CultureInfo.InvariantCulture) + " / " + video.FrameCount.ToString(CultureInfo.InvariantCulture);
         VideoFrameBadge.Visibility = Visibility.Visible;
 
         try
         {
             var path = await _videoFrameCache.GetFrameForDisplayAsync(frameIndex, token);
-            if (token.IsCancellationRequested || version != _videoFrameLoadVersion || !IsVideoFrameMode)
+            if (token.IsCancellationRequested || version != _videoFrameLoadVersion || _isClosing || !IsVideoFrameMode || NormalizeTargetVideoFrameIndex() != frameIndex)
             {
-                return;
+                return true;
             }
 
             var bitmap = LoadBitmap(path);
             _sourceBitmapByMode[AppMode.VideoFrames] = bitmap;
+            _displayedVideoFrameIndex = frameIndex;
             ApplyImageEffects();
             ApplyImageViewState();
             QueueImageViewStateClamp();
@@ -907,14 +1016,24 @@ public partial class MainWindow : Window
             VideoFrameEmptyText.Visibility = Visibility.Collapsed;
             UpdateVideoFrameText();
             _videoFrameCache.PreloadAround(frameIndex);
+            return true;
         }
         catch (OperationCanceledException)
         {
             // Newer frame request won.
+            return true;
         }
         catch (Exception ex)
         {
             ShowToast(T("Cannot load frame: ", "无法载入帧：") + ex.Message);
+            return false;
+        }
+        finally
+        {
+            if (_loadingVideoFrameIndex == frameIndex)
+            {
+                _loadingVideoFrameIndex = -1;
+            }
         }
     }
 
@@ -934,6 +1053,8 @@ public partial class MainWindow : Window
     {
         _videoFrameLoadVersion++;
         _videoFrameLoadCts.Cancel();
+        _videoFrameCache.CancelPreload();
+        _loadingVideoFrameIndex = -1;
     }
 
     private void UpdateVideoFrameText()
@@ -946,7 +1067,10 @@ public partial class MainWindow : Window
         }
 
         var frame = Math.Clamp(ActiveModeState().VideoFrameIndex, 0, video.FrameCount - 1);
-        VideoFrameText.Text = T("Frame ", "帧 ") + (frame + 1).ToString(CultureInfo.InvariantCulture) + " / " + video.FrameCount.ToString(CultureInfo.InvariantCulture);
+        var prefix = frame != _displayedVideoFrameIndex
+            ? T("Loading frame ", "正在载入帧 ")
+            : T("Frame ", "帧 ");
+        VideoFrameText.Text = prefix + (frame + 1).ToString(CultureInfo.InvariantCulture) + " / " + video.FrameCount.ToString(CultureInfo.InvariantCulture);
         VideoFrameBadge.Visibility = Visibility.Visible;
     }
 
@@ -954,7 +1078,7 @@ public partial class MainWindow : Window
     {
         if (IsVideoFrameMode)
         {
-            _ = LoadCurrentVideoFrameAsync();
+            RequestVideoFrameDisplay();
             return;
         }
 
@@ -1212,7 +1336,7 @@ public partial class MainWindow : Window
         }
 
         CurrentIndex = modeState.VideoFrameIndex;
-        _ = LoadCurrentVideoFrameAsync();
+        RequestVideoFrameDisplay();
         UpdateVideoFrameText();
     }
 
@@ -1529,17 +1653,26 @@ public partial class MainWindow : Window
         MosaicSmallItem.Header = T("Small", "小");
         MosaicMediumItem.Header = T("Medium", "中");
         MosaicLargeItem.Header = T("Large", "大");
-        SettingsMenu.Header = T("Settings", "设置");
+        SettingsMenu.Header = _updateAvailable
+            ? T("Settings *", "设置 *")
+            : T("Settings", "设置");
         StayOnTopItem.Header = T("Stay On Top", "窗口置顶");
         LanguageMenu.Header = T("Language", "语言");
         EnglishLanguageItem.Header = T("English", "英文");
         ChineseLanguageItem.Header = T("Chinese", "中文");
-        CheckForUpdatesItem.Header = T("Check For Updates", "检查更新");
-        UpdateProxyItem.Header = T("Update Proxy...", "更新代理...");
+        CheckForUpdatesItem.Header = _updateAvailable
+            ? T("Update Available - Click to Install", "有可用更新 - 点击安装")
+            : T("Check For Updates", "检查更新");
         ThemeAccentItem.Header = T("Theme Accent...", "主题色...");
         LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
         SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
+        OpenSourceNoticeItem.Header = T(
+            "Free open-source software on GitHub. Paid copies are scams.",
+            "本软件免费开源发布在 GitHub 上，付费购买皆为骗局。");
+        GitHubRepositoryItem.Header = T(
+            "Open GitHub Repository / Issues",
+            "打开 GitHub 仓库 / Issue 反馈");
         var sourcePrompt = IsVideoFrameMode
             ? T("Import Video...", "导入视频...")
             : T("Set Image Folder...", "选择图片文件夹...");
@@ -1676,10 +1809,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        await CheckForUpdatesAsync(manual: false);
+        await CheckForUpdatesAsync(manual: false, installIfAvailable: false);
     }
 
-    private async Task CheckForUpdatesAsync(bool manual)
+    private async Task CheckForUpdatesAsync(bool manual, bool installIfAvailable)
     {
         if (_updateBusy)
         {
@@ -1699,8 +1832,22 @@ public partial class MainWindow : Window
                 ShowToast(T("Checking GitHub for updates...", "正在检查 GitHub 更新..."));
             }
 
-            var release = await _updateService.FetchLatestReleaseAsync(_state.UpdateProxyUrl);
-            if (!UpdateService.IsNewerVersion(release.Version, UpdateService.AppVersion))
+            var processPath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(processPath) || !processPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                if (manual)
+                {
+                    ShowToast(T("Update is only available in the packaged Windows app", "更新仅支持打包后的 Windows 应用"));
+                }
+
+                return;
+            }
+
+            var result = await _updateService.CheckLatestReleaseAsync(processPath);
+            _updateAvailable = result.UpdateAvailable;
+            UpdateAllUi();
+
+            if (!result.UpdateAvailable)
             {
                 if (manual)
                 {
@@ -1710,31 +1857,25 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var result = System.Windows.MessageBox.Show(
-                T($"A new JustDraw version is available: {release.Version}\n\nDownload and restart JustDraw?\n\n{release.HtmlUrl}",
-                    $"发现 JustDraw 新版本：{release.Version}\n\n是否下载并重启 JustDraw？\n\n{release.HtmlUrl}"),
-                T("JustDraw Update", "JustDraw 更新"),
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-            if (result != MessageBoxResult.Yes)
+            if (!installIfAvailable)
             {
-                return;
-            }
+                if (manual)
+                {
+                    ShowToast(T("Update available. Click again to download.", "发现可用更新，再次点击即可下载。"));
+                }
 
-            if (string.IsNullOrWhiteSpace(Environment.ProcessPath) || !Environment.ProcessPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            {
-                System.Windows.MessageBox.Show(
-                    T($"Automatic replacement is only available in the packaged Windows app.\n\n{release.HtmlUrl}",
-                        $"自动替换仅支持打包后的 Windows 应用。\n\n{release.HtmlUrl}"),
-                    T("JustDraw Update", "JustDraw 更新"));
                 return;
             }
 
             ShowToast(T("Downloading JustDraw update...", "正在下载 JustDraw 更新..."));
-            var downloaded = await _updateService.DownloadReleaseExeAsync(release, _state.UpdateProxyUrl);
+            var downloaded = await _updateService.DownloadReleaseExeAsync(result.Release);
             var script = _updateService.CreateUpdateScript(downloaded);
             UpdateService.LaunchUpdateScript(script);
             Close();
+        }
+        catch (UpdateNetworkException)
+        {
+            ShowToast(T("Network problem. Please check your internet connection or system proxy.", "网络有问题，请检查网络连接或系统代理。"));
         }
         catch (Exception ex)
         {
@@ -1746,6 +1887,7 @@ public partial class MainWindow : Window
         finally
         {
             _updateBusy = false;
+            UpdateAllUi();
         }
     }
 
@@ -2029,7 +2171,7 @@ public partial class MainWindow : Window
         if (IsVideoFrameMode)
         {
             CurrentIndex = 0;
-            _ = LoadCurrentVideoFrameAsync();
+            RequestVideoFrameDisplay();
             ShowToast(T("Path playback state deleted", "已删除当前路径播放状态"));
             UpdateAllUi();
             return;
@@ -2349,24 +2491,7 @@ public partial class MainWindow : Window
 
     private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
     {
-        await CheckForUpdatesAsync(manual: true);
-    }
-
-    private void UpdateProxy_Click(object sender, RoutedEventArgs e)
-    {
-        var input = Microsoft.VisualBasic.Interaction.InputBox(
-            T("Proxy URL for GitHub updates. Leave empty for direct connection.", "GitHub 更新代理地址。留空则直连。"),
-            T("Update Proxy", "更新代理"),
-            _state.UpdateProxyUrl);
-        try
-        {
-            _state.UpdateProxyUrl = UpdateService.ValidateProxyUrl(input);
-            ShowToast(T("Update proxy saved", "更新代理已保存"));
-        }
-        catch (ArgumentException ex)
-        {
-            ShowToast(ex.Message);
-        }
+        await CheckForUpdatesAsync(manual: true, installIfAvailable: _updateAvailable);
     }
 
     private void ThemeAccent_Click(object sender, RoutedEventArgs e)
@@ -2459,6 +2584,15 @@ public partial class MainWindow : Window
         root.Children.Add(actions);
         dialog.Content = root;
         return dialog.ShowDialog() == true ? selected ?? "" : "";
+    }
+
+    private void GitHubRepository_Click(object sender, RoutedEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = UpdateService.RepositoryUrl,
+            UseShellExecute = true
+        });
     }
 
     private async void ProtectedVideoExport_Click(object sender, RoutedEventArgs e)
@@ -2707,6 +2841,7 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        _isClosing = true;
         CancelVideoFrameLoad();
         SaveCurrentImageViewState();
         if (WindowState == WindowState.Normal)

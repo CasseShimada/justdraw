@@ -53,7 +53,6 @@ public sealed class JustDrawState
     public bool FlipHorizontal { get; set; }
     public bool FlipVertical { get; set; }
     public string UiLanguage { get; set; } = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("zh", StringComparison.OrdinalIgnoreCase) ? "zh" : "en";
-    public string UpdateProxyUrl { get; set; } = "";
     public bool TimerFinishNotificationEnabled { get; set; }
     public bool SampleImageColorsEnabled { get; set; }
     public bool GrayscaleDisplayEnabled { get; set; }

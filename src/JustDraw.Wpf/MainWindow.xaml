@@ -25,7 +25,7 @@
         </Style>
         <ControlTemplate x:Key="TopLevelMenuItemTemplate" TargetType="{x:Type MenuItem}">
             <Border x:Name="templateRoot"
-                    Background="{DynamicResource SurfaceBrush}"
+                    Background="{TemplateBinding Background}"
                     SnapsToDevicePixels="True">
                 <ContentPresenter ContentSource="Header"
                                   RecognizesAccessKey="True"
@@ -45,7 +45,7 @@
         <ControlTemplate x:Key="TopLevelMenuHeaderTemplate" TargetType="{x:Type MenuItem}">
             <Grid SnapsToDevicePixels="True">
                 <Border x:Name="templateRoot"
-                        Background="{DynamicResource SurfaceBrush}"
+                        Background="{TemplateBinding Background}"
                         SnapsToDevicePixels="True">
                     <ContentPresenter ContentSource="Header"
                                       RecognizesAccessKey="True"
@@ -83,7 +83,7 @@
 
         <ControlTemplate x:Key="SubmenuItemTemplate" TargetType="{x:Type MenuItem}">
             <Border x:Name="templateRoot"
-                    Background="{DynamicResource PanelBrush}"
+                    Background="{TemplateBinding Background}"
                     SnapsToDevicePixels="True">
                 <Grid MinHeight="28">
                     <Grid.ColumnDefinitions>
@@ -114,7 +114,7 @@
         <ControlTemplate x:Key="SubmenuHeaderTemplate" TargetType="{x:Type MenuItem}">
             <Grid SnapsToDevicePixels="True">
                 <Border x:Name="templateRoot"
-                        Background="{DynamicResource PanelBrush}"
+                        Background="{TemplateBinding Background}"
                         SnapsToDevicePixels="True">
                     <Grid MinHeight="28">
                         <Grid.ColumnDefinitions>
@@ -274,11 +274,13 @@
                     <MenuItem x:Name="ChineseLanguageItem" Header="Chinese" Click="ChineseLanguage_Click" />
                 </MenuItem>
                 <MenuItem x:Name="CheckForUpdatesItem" Header="Check For Updates" Click="CheckForUpdates_Click" />
-                <MenuItem x:Name="UpdateProxyItem" Header="Update Proxy..." Click="UpdateProxy_Click" />
                 <MenuItem x:Name="ThemeAccentItem" Header="Theme Accent..." Click="ThemeAccent_Click" />
                 <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
                 <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />
                 <MenuItem x:Name="SampleImageColorsItem" Header="Sample 30 Image Colors" Click="SampleImageColors_Click" />
+                <Separator />
+                <MenuItem x:Name="OpenSourceNoticeItem" Header="JustDraw is free and open-source on GitHub. Paid copies are scams." IsEnabled="False" />
+                <MenuItem x:Name="GitHubRepositoryItem" Header="Open GitHub Repository / Issues" Click="GitHubRepository_Click" />
             </MenuItem>
         </Menu>
 

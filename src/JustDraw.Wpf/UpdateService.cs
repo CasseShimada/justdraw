@@ -19,11 +19,20 @@ public sealed record ReleaseInfo(
     public string Version => UpdateService.NormalizeVersion(TagName);
 }
 
+public sealed record UpdateCheckResult(
+    ReleaseInfo Release,
+    string LocalSha256,
+    string RemoteSha256,
+    bool UpdateAvailable);
+
+public sealed class UpdateNetworkException(string message, Exception? innerException = null) : Exception(message, innerException);
+
 public sealed class UpdateService
 {
     private const string Owner = "CasseShimada";
     private const string Repo = "justdraw";
     private const string ApiLatestRelease = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
+    public const string RepositoryUrl = $"https://github.com/{Owner}/{Repo}";
     public const string ReleasesUrl = $"https://github.com/{Owner}/{Repo}/releases/latest";
     private const string WindowsExeAssetName = "JustDraw.exe";
     private const string WindowsSha256AssetName = "JustDraw.exe.sha256";
@@ -86,68 +95,61 @@ public sealed class UpdateService
         }
     }
 
-    public static string ValidateProxyUrl(string proxyUrl)
+    public async Task<UpdateCheckResult> CheckLatestReleaseAsync(string currentExePath, CancellationToken cancellationToken = default)
     {
-        var value = (proxyUrl ?? "").Trim();
-        if (value.Length == 0)
+        if (string.IsNullOrWhiteSpace(currentExePath) || !File.Exists(currentExePath))
         {
-            return "";
+            throw new FileNotFoundException("Current executable does not exist", currentExePath);
         }
 
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host))
-        {
-            throw new ArgumentException("Proxy URL is invalid");
-        }
-
-        var scheme = uri.Scheme.ToLowerInvariant();
-        if (scheme is not ("http" or "https" or "socks4" or "socks4a" or "socks5" or "socks5h"))
-        {
-            throw new ArgumentException("Proxy must start with http://, https://, socks4://, or socks5://");
-        }
-
-        return value;
+        var release = await FetchLatestReleaseAsync(cancellationToken).ConfigureAwait(false);
+        var remoteSha = await FetchReleaseSha256Async(release, cancellationToken).ConfigureAwait(false);
+        var localSha = ComputeSha256(currentExePath);
+        return new UpdateCheckResult(release, localSha, remoteSha, !localSha.Equals(remoteSha, StringComparison.OrdinalIgnoreCase));
     }
 
-    public async Task<ReleaseInfo> FetchLatestReleaseAsync(string proxyUrl, CancellationToken cancellationToken = default)
+    public async Task<ReleaseInfo> FetchLatestReleaseAsync(CancellationToken cancellationToken = default)
     {
-        using var client = CreateHttpClient(proxyUrl);
-        using var request = new HttpRequestMessage(HttpMethod.Get, ApiLatestRelease);
-        request.Headers.UserAgent.ParseAdd($"JustDraw/{AppVersion}");
-        request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        var root = document.RootElement;
-        var exeUrl = "";
-        var shaUrl = "";
-        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+        return await UseBestConnectionAsync(async (client, token) =>
         {
-            foreach (var asset in assets.EnumerateArray())
+            using var request = new HttpRequestMessage(HttpMethod.Get, ApiLatestRelease);
+            request.Headers.UserAgent.ParseAdd($"JustDraw/{AppVersion}");
+            request.Headers.Accept.ParseAdd("application/vnd.github+json");
+            using var response = await client.SendAsync(request, token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
+            var root = document.RootElement;
+            var exeUrl = "";
+            var shaUrl = "";
+            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
             {
-                var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
-                var url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() ?? "" : "";
-                if (name.Equals(WindowsExeAssetName, StringComparison.OrdinalIgnoreCase))
+                foreach (var asset in assets.EnumerateArray())
                 {
-                    exeUrl = url;
-                }
-                else if (name.Equals(WindowsSha256AssetName, StringComparison.OrdinalIgnoreCase))
-                {
-                    shaUrl = url;
+                    var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
+                    var url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() ?? "" : "";
+                    if (name.Equals(WindowsExeAssetName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exeUrl = url;
+                    }
+                    else if (name.Equals(WindowsSha256AssetName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        shaUrl = url;
+                    }
                 }
             }
-        }
 
-        return new ReleaseInfo(
-            root.TryGetProperty("tag_name", out var tag) ? tag.GetString() ?? "" : "",
-            root.TryGetProperty("name", out var nameValue) ? nameValue.GetString() ?? "" : "",
-            root.TryGetProperty("html_url", out var html) ? html.GetString() ?? ReleasesUrl : ReleasesUrl,
-            exeUrl,
-            shaUrl,
-            root.TryGetProperty("body", out var body) ? body.GetString() ?? "" : "");
+            return new ReleaseInfo(
+                root.TryGetProperty("tag_name", out var tag) ? tag.GetString() ?? "" : "",
+                root.TryGetProperty("name", out var nameValue) ? nameValue.GetString() ?? "" : "",
+                root.TryGetProperty("html_url", out var html) ? html.GetString() ?? ReleasesUrl : ReleasesUrl,
+                exeUrl,
+                shaUrl,
+                root.TryGetProperty("body", out var body) ? body.GetString() ?? "" : "");
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<string> DownloadReleaseExeAsync(ReleaseInfo releaseInfo, string proxyUrl, CancellationToken cancellationToken = default)
+    public async Task<string> DownloadReleaseExeAsync(ReleaseInfo releaseInfo, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(releaseInfo.ExeUrl))
         {
@@ -157,19 +159,23 @@ public sealed class UpdateService
         var tempDir = Path.Combine(Path.GetTempPath(), "justdraw-update-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         var exePath = Path.Combine(tempDir, WindowsExeAssetName);
-        using var client = CreateHttpClient(proxyUrl);
-        await DownloadFileAsync(client, releaseInfo.ExeUrl, exePath, cancellationToken).ConfigureAwait(false);
-        if (new FileInfo(exePath).Length <= 0)
+        await UseBestConnectionAsync(async (client, token) =>
         {
-            throw new InvalidOperationException("Downloaded update file is empty");
-        }
+            await DownloadFileAsync(client, releaseInfo.ExeUrl, exePath, token).ConfigureAwait(false);
+            if (new FileInfo(exePath).Length <= 0)
+            {
+                throw new InvalidOperationException("Downloaded update file is empty");
+            }
 
-        if (!string.IsNullOrWhiteSpace(releaseInfo.Sha256Url))
-        {
-            var shaPath = Path.Combine(tempDir, WindowsSha256AssetName);
-            await DownloadFileAsync(client, releaseInfo.Sha256Url, shaPath, cancellationToken).ConfigureAwait(false);
-            VerifySha256(exePath, shaPath);
-        }
+            if (!string.IsNullOrWhiteSpace(releaseInfo.Sha256Url))
+            {
+                var shaPath = Path.Combine(tempDir, WindowsSha256AssetName);
+                await DownloadFileAsync(client, releaseInfo.Sha256Url, shaPath, token).ConfigureAwait(false);
+                VerifySha256(exePath, shaPath);
+            }
+
+            return true;
+        }, cancellationToken).ConfigureAwait(false);
 
         return exePath;
     }
@@ -231,19 +237,65 @@ public sealed class UpdateService
         });
     }
 
-    private static HttpClient CreateHttpClient(string proxyUrl)
+    private static async Task<string> FetchReleaseSha256Async(ReleaseInfo releaseInfo, CancellationToken cancellationToken)
     {
-        var proxy = ValidateProxyUrl(proxyUrl);
-        var handler = new HttpClientHandler();
-        if (proxy.Length > 0)
+        if (string.IsNullOrWhiteSpace(releaseInfo.Sha256Url))
         {
-            handler.Proxy = new WebProxy(proxy);
-            handler.UseProxy = true;
+            throw new InvalidOperationException($"The latest release does not include {WindowsSha256AssetName}");
+        }
+
+        return await UseBestConnectionAsync(async (client, token) =>
+        {
+            using var response = await client.GetAsync(releaseInfo.Sha256Url, token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var text = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            return ParseSha256(text);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<T> UseBestConnectionAsync<T>(Func<HttpClient, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var directClient = CreateHttpClient(useSystemProxy: false);
+            return await action(directClient, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsConnectionFailure(ex))
+        {
+            // Direct connection failed. Try the system proxy next.
+        }
+
+        try
+        {
+            using var proxyClient = CreateHttpClient(useSystemProxy: true);
+            return await action(proxyClient, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsConnectionFailure(ex))
+        {
+            throw new UpdateNetworkException("Network error. Please check your internet connection or system proxy.", ex);
+        }
+    }
+
+    private static bool IsConnectionFailure(Exception ex) =>
+        ex is TaskCanceledException or WebException ||
+        ex is HttpRequestException { StatusCode: null };
+
+    private static HttpClient CreateHttpClient(bool useSystemProxy)
+    {
+        var handler = new HttpClientHandler
+        {
+            UseProxy = useSystemProxy,
+            Proxy = useSystemProxy ? WebRequest.DefaultWebProxy : null
+        };
+
+        if (handler.Proxy is not null)
+        {
+            handler.Proxy.Credentials = CredentialCache.DefaultCredentials;
         }
 
         return new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromMinutes(5)
+            Timeout = TimeSpan.FromSeconds(30)
         };
     }
 
@@ -258,18 +310,29 @@ public sealed class UpdateService
 
     private static void VerifySha256(string exePath, string shaPath)
     {
-        var expected = File.ReadAllText(shaPath).Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
+        var expected = ParseSha256(File.ReadAllText(shaPath));
+        var actual = ComputeSha256(exePath);
+        if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Downloaded update checksum did not match the release checksum");
+        }
+    }
+
+    private static string ParseSha256(string text)
+    {
+        var expected = text.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
         if (expected is null || !Regex.IsMatch(expected, "^[0-9a-f]{64}$"))
         {
             throw new InvalidOperationException("Release checksum is invalid");
         }
 
-        using var stream = File.OpenRead(exePath);
-        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Downloaded update checksum did not match the release checksum");
-        }
+        return expected;
+    }
+
+    private static string ComputeSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     private static string QuotePowerShell(string value) => "'" + value.Replace("'", "''") + "'";
