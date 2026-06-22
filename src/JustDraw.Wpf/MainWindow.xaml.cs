@@ -902,6 +902,7 @@ public partial class MainWindow : Window
             _sourceBitmapByMode[AppMode.VideoFrames] = bitmap;
             ApplyImageEffects();
             ApplyImageViewState();
+            QueueImageViewStateClamp();
             ResampleImageColorsIfEnabled();
             VideoFrameEmptyText.Visibility = Visibility.Collapsed;
             UpdateVideoFrameText();
@@ -973,6 +974,7 @@ public partial class MainWindow : Window
             ActiveModeState().LastImagePath = entry.Path;
             ApplyImageEffects();
             ApplyImageViewState();
+            QueueImageViewStateClamp();
             ResampleImageColorsIfEnabled();
             PhotoEmptyText.Visibility = Visibility.Collapsed;
             ColorPhotoEmptyText.Visibility = Visibility.Collapsed;
@@ -1033,6 +1035,7 @@ public partial class MainWindow : Window
     private void ApplyImageViewState()
     {
         var state = GetCurrentImageViewState();
+        ClampImageViewState(state);
         var transformGroup = new TransformGroup();
         transformGroup.Children.Add(new ScaleTransform(
             (_state.FlipHorizontal ? -1 : 1) * state.Scale,
@@ -1040,6 +1043,47 @@ public partial class MainWindow : Window
         transformGroup.Children.Add(new RotateTransform(state.Rotation));
         transformGroup.Children.Add(new TranslateTransform(state.OffsetX, state.OffsetY));
         ActiveImage.RenderTransform = transformGroup;
+    }
+
+    private void QueueImageViewStateClamp()
+    {
+        Dispatcher.BeginInvoke(new Action(ApplyImageViewState), DispatcherPriority.Loaded);
+    }
+
+    private void ClampImageViewState(ImageViewState state)
+    {
+        if (!IsImageMode || ActiveImage.Source is null)
+        {
+            return;
+        }
+
+        state.Scale = Math.Clamp(state.Scale, 1.0, 8.0);
+        var imageWidth = ActiveImage.RenderSize.Width;
+        var imageHeight = ActiveImage.RenderSize.Height;
+        if (imageWidth <= 0 || imageHeight <= 0)
+        {
+            imageWidth = ActiveImage.ActualWidth;
+            imageHeight = ActiveImage.ActualHeight;
+        }
+
+        var viewportWidth = ActiveViewport.ActualWidth;
+        var viewportHeight = ActiveViewport.ActualHeight;
+        if (imageWidth <= 0 || imageHeight <= 0 || viewportWidth <= 0 || viewportHeight <= 0)
+        {
+            return;
+        }
+
+        var displayedWidth = imageWidth * state.Scale;
+        var displayedHeight = imageHeight * state.Scale;
+        if (NormalizeRotation(state.Rotation) is 90 or 270)
+        {
+            (displayedWidth, displayedHeight) = (displayedHeight, displayedWidth);
+        }
+
+        var maxOffsetX = Math.Max(0, (displayedWidth - viewportWidth) / 2);
+        var maxOffsetY = Math.Max(0, (displayedHeight - viewportHeight) / 2);
+        state.OffsetX = Math.Clamp(state.OffsetX, -maxOffsetX, maxOffsetX);
+        state.OffsetY = Math.Clamp(state.OffsetY, -maxOffsetY, maxOffsetY);
     }
 
     private ImageViewState GetCurrentImageViewState()
@@ -2453,6 +2497,8 @@ public partial class MainWindow : Window
     {
         _isDraggingImage = false;
         ActiveViewport.ReleaseMouseCapture();
+        ClampImageViewState(GetCurrentImageViewState());
+        ApplyImageViewState();
         SaveCurrentImageViewState();
     }
 
@@ -2653,6 +2699,10 @@ public partial class MainWindow : Window
         }
 
         RenderSampledImageColors();
+        if (IsImageMode && ActiveImage.Source is not null)
+        {
+            ApplyImageViewState();
+        }
     }
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
