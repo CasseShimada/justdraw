@@ -16,6 +16,7 @@ public sealed class VideoFrameCache : IDisposable
     private readonly SemaphoreSlim _extractGate = new(2);
     private readonly ConcurrentDictionary<int, Task<string>> _frameTasks = [];
     private readonly object _sync = new();
+    private readonly object _preloadSync = new();
     private readonly List<int> _cacheOrder = [];
 
     private VideoToolsInfo _tools = new("", "", false, "");
@@ -23,6 +24,7 @@ public sealed class VideoFrameCache : IDisposable
     private string _cacheDirectory = "";
     private int _preloadVersion;
     private int _sessionId;
+    private CancellationTokenSource? _preloadCts;
 
     public VideoFrameInfo? CurrentVideo => _video;
 
@@ -54,7 +56,7 @@ public sealed class VideoFrameCache : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         var cacheDirectory = _cacheDirectory;
         var sessionId = _sessionId;
-        var task = _frameTasks.GetOrAdd(index, _ => ExtractFrameAsync(video, index, cacheDirectory, sessionId));
+        var task = _frameTasks.GetOrAdd(index, _ => ExtractFrameAsync(video, index, cacheDirectory, sessionId, cancellationToken));
         try
         {
             var path = await task.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -72,6 +74,49 @@ public sealed class VideoFrameCache : IDisposable
         }
     }
 
+    public async Task<string> GetFrameForDisplayAsync(int frameIndex, CancellationToken cancellationToken = default)
+    {
+        CancelPreload();
+        var video = _video ?? throw new InvalidOperationException("No video is open");
+        var index = Math.Clamp(frameIndex, 0, video.FrameCount - 1);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_frameTasks.TryGetValue(index, out var existingTask))
+        {
+            try
+            {
+                var cachedPath = await existingTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (File.Exists(cachedPath))
+                {
+                    Touch(index);
+                    return cachedPath;
+                }
+
+                _frameTasks.TryRemove(index, out _);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _frameTasks.TryRemove(index, out _);
+            }
+            catch
+            {
+                if (existingTask.IsFaulted || existingTask.IsCanceled)
+                {
+                    _frameTasks.TryRemove(index, out _);
+                }
+
+                throw;
+            }
+        }
+
+        var cacheDirectory = _cacheDirectory;
+        var sessionId = _sessionId;
+        var path = await ExtractFrameAsync(video, index, cacheDirectory, sessionId, cancellationToken).ConfigureAwait(false);
+        _frameTasks[index] = Task.FromResult(path);
+        Touch(index);
+        return path;
+    }
+
     public void PreloadAround(int frameIndex)
     {
         var video = _video;
@@ -81,36 +126,58 @@ public sealed class VideoFrameCache : IDisposable
         }
 
         var version = Interlocked.Increment(ref _preloadVersion);
+        var cts = BeginPreload();
+        var token = cts.Token;
         _ = Task.Run(async () =>
         {
-            var start = Math.Max(0, frameIndex - PreloadRadius);
-            var end = Math.Min(video.FrameCount - 1, frameIndex + PreloadRadius);
-            var indexes = Enumerable.Range(start, end - start + 1)
-                .OrderBy(index => Math.Abs(index - frameIndex))
-                .ToList();
-
-            foreach (var index in indexes)
+            try
             {
-                if (version != Volatile.Read(ref _preloadVersion))
-                {
-                    return;
-                }
+                var start = Math.Max(0, frameIndex - PreloadRadius);
+                var end = Math.Min(video.FrameCount - 1, frameIndex + PreloadRadius);
+                var indexes = Enumerable.Range(start, end - start + 1)
+                    .OrderBy(index => Math.Abs(index - frameIndex))
+                    .ToList();
 
-                try
+                foreach (var index in indexes)
                 {
-                    await GetFrameAsync(index).ConfigureAwait(false);
+                    if (version != Volatile.Read(ref _preloadVersion) || token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        await GetFrameAsync(index, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    catch
+                    {
+                        // Bad individual frames should not stop navigation.
+                    }
                 }
-                catch
-                {
-                    // Bad individual frames should not stop navigation.
-                }
+            }
+            finally
+            {
+                FinishPreload(cts);
             }
         });
     }
 
-    public void Clear()
+    public void CancelPreload()
     {
         Interlocked.Increment(ref _preloadVersion);
+        lock (_preloadSync)
+        {
+            _preloadCts?.Cancel();
+        }
+    }
+
+    public void Clear()
+    {
+        CancelPreload();
         Interlocked.Increment(ref _sessionId);
         foreach (var path in _frameTasks.Values.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result))
         {
@@ -132,9 +199,32 @@ public sealed class VideoFrameCache : IDisposable
         _cacheDirectory = "";
     }
 
-    private async Task<string> ExtractFrameAsync(VideoFrameInfo video, int frameIndex, string cacheDirectory, int sessionId)
+    private CancellationTokenSource BeginPreload()
     {
-        await _extractGate.WaitAsync().ConfigureAwait(false);
+        lock (_preloadSync)
+        {
+            _preloadCts?.Cancel();
+            _preloadCts = new CancellationTokenSource();
+            return _preloadCts;
+        }
+    }
+
+    private void FinishPreload(CancellationTokenSource cts)
+    {
+        lock (_preloadSync)
+        {
+            if (ReferenceEquals(_preloadCts, cts))
+            {
+                _preloadCts = null;
+            }
+        }
+
+        cts.Dispose();
+    }
+
+    private async Task<string> ExtractFrameAsync(VideoFrameInfo video, int frameIndex, string cacheDirectory, int sessionId, CancellationToken cancellationToken)
+    {
+        await _extractGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             Directory.CreateDirectory(cacheDirectory);
@@ -154,7 +244,8 @@ public sealed class VideoFrameCache : IDisposable
                 "-frames:v", "1",
                 "-q:v", "2",
                 path
-            ], CancellationToken.None).ConfigureAwait(false);
+            ], cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (sessionId == Volatile.Read(ref _sessionId))
             {
                 TrimCache(frameIndex);
@@ -163,9 +254,15 @@ public sealed class VideoFrameCache : IDisposable
             {
                 TryDelete(path);
                 TryDeleteDirectory(cacheDirectory);
+                throw new OperationCanceledException();
             }
 
             return path;
+        }
+        catch (OperationCanceledException)
+        {
+            TryDelete(FramePath(cacheDirectory, frameIndex));
+            throw;
         }
         finally
         {
@@ -278,7 +375,16 @@ public sealed class VideoFrameCache : IDisposable
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start {fileName}");
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+
         var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
@@ -287,6 +393,21 @@ public sealed class VideoFrameCache : IDisposable
         }
 
         return stdout;
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Process cancellation is best effort.
+        }
     }
 
     private static void TryDelete(string path)
@@ -318,6 +439,7 @@ public sealed class VideoFrameCache : IDisposable
 
     public void Dispose()
     {
+        CancelPreload();
         Clear();
     }
 }

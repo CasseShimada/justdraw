@@ -892,7 +892,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var path = await _videoFrameCache.GetFrameAsync(frameIndex, token);
+            var path = await _videoFrameCache.GetFrameForDisplayAsync(frameIndex, token);
             if (token.IsCancellationRequested || version != _videoFrameLoadVersion || !IsVideoFrameMode)
             {
                 return;
