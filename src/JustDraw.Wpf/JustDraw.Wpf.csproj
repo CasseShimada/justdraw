@@ -8,6 +8,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>JustDraw.ico</ApplicationIcon>
     <AssemblyName>JustDraw</AssemblyName>
     <Version Condition="'$(Version)' == ''">0.0.0</Version>
   </PropertyGroup>
