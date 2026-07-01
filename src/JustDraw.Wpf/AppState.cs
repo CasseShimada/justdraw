@@ -28,6 +28,21 @@ public sealed class ImageViewState
     public int Rotation { get; set; }
 }
 
+public sealed class PathPlaybackState
+{
+    public string LastImagePath { get; set; } = "";
+    public int VideoFrameIndex { get; set; }
+    public bool UseCustomImageOrder { get; set; }
+    public List<string> ImageOrder { get; set; } = [];
+
+    public void Normalize()
+    {
+        LastImagePath ??= "";
+        ImageOrder ??= [];
+        VideoFrameIndex = Math.Max(0, VideoFrameIndex);
+    }
+}
+
 public sealed class ModeState
 {
     public string ImageRootPath { get; set; } = "";
@@ -40,7 +55,113 @@ public sealed class ModeState
     public bool MosaicEnabled { get; set; }
     public List<string> ImageOrder { get; set; } = [];
     public Dictionary<string, ImageViewState> ImageViewStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, PathPlaybackState> PathPlaybackStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> RecentPaths { get; set; } = [];
+
+    public PathPlaybackState GetPathPlaybackState(string path)
+    {
+        EnsurePathPlaybackComparer();
+        var key = NormalizePathKey(path);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return new PathPlaybackState();
+        }
+
+        if (!PathPlaybackStates.TryGetValue(key, out var state))
+        {
+            state = new PathPlaybackState();
+            PathPlaybackStates[key] = state;
+        }
+
+        state.Normalize();
+        return state;
+    }
+
+    public void RemovePathPlaybackState(string path)
+    {
+        EnsurePathPlaybackComparer();
+        var key = NormalizePathKey(path);
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            PathPlaybackStates.Remove(key);
+        }
+    }
+
+    public void Normalize()
+    {
+        ImageRootPath ??= "";
+        LastImagePath ??= "";
+        ImageOrder ??= [];
+        RecentPaths ??= [];
+        ImageViewStates = new Dictionary<string, ImageViewState>(ImageViewStates ?? [], StringComparer.OrdinalIgnoreCase);
+        NormalizePathPlaybackStates();
+        VideoFrameIndex = Math.Max(0, VideoFrameIndex);
+
+        if (!string.IsNullOrWhiteSpace(ImageRootPath))
+        {
+            var playback = GetPathPlaybackState(ImageRootPath);
+            if (string.IsNullOrWhiteSpace(playback.LastImagePath) && !string.IsNullOrWhiteSpace(LastImagePath))
+            {
+                playback.LastImagePath = LastImagePath;
+            }
+
+            if (playback.UseCustomImageOrder && playback.ImageOrder.Count == 0 && ImageOrder.Count > 0)
+            {
+                playback.ImageOrder = ImageOrder.ToList();
+            }
+
+            if (playback.VideoFrameIndex == 0 && VideoFrameIndex > 0)
+            {
+                playback.VideoFrameIndex = VideoFrameIndex;
+            }
+        }
+    }
+
+    private void EnsurePathPlaybackComparer()
+    {
+        if (PathPlaybackStates is not null && PathPlaybackStates.Comparer == StringComparer.OrdinalIgnoreCase)
+        {
+            return;
+        }
+
+        NormalizePathPlaybackStates();
+    }
+
+    private void NormalizePathPlaybackStates()
+    {
+        var normalized = new Dictionary<string, PathPlaybackState>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in PathPlaybackStates ?? [])
+        {
+            var key = NormalizePathKey(pair.Key);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var state = pair.Value ?? new PathPlaybackState();
+            state.Normalize();
+            normalized[key] = state;
+        }
+
+        PathPlaybackStates = normalized;
+    }
+
+    private static string NormalizePathKey(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "";
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path.Trim();
+        }
+    }
 }
 
 public sealed class JustDrawState
@@ -57,6 +178,7 @@ public sealed class JustDrawState
     public bool SampleImageColorsEnabled { get; set; }
     public bool GrayscaleDisplayEnabled { get; set; }
     public string ThemeAccentColor { get; set; } = "#0EA5A8";
+    public int VideoFrameBufferSeconds { get; set; } = 10;
     public int MosaicDownsampleFactor { get; set; } = 16;
     public int ColorBlocksStripeCount { get; set; } = 1;
     public double ColorBlocksMinLuma { get; set; } = 0.22;
@@ -82,12 +204,13 @@ public sealed class JustDrawState
 
     public ModeState GetModeState(AppMode mode)
     {
+        Modes ??= new Dictionary<AppMode, ModeState>();
         if (mode is not (AppMode.PhotoSwitching or AppMode.ColorPhoto or AppMode.VideoFrames))
         {
             return PhotoSwitching;
         }
 
-        if (!Modes.TryGetValue(mode, out var state))
+        if (!Modes.TryGetValue(mode, out var state) || state is null)
         {
             state = new ModeState();
             Modes[mode] = state;
@@ -143,6 +266,12 @@ public static class StateStore
             _ = state.PhotoSwitching;
             _ = state.ColorPhoto;
             _ = state.VideoFrames;
+            foreach (var modeState in state.Modes.Values)
+            {
+                modeState.Normalize();
+            }
+
+            state.VideoFrameBufferSeconds = Math.Clamp(state.VideoFrameBufferSeconds <= 0 ? 10 : state.VideoFrameBufferSeconds, 1, 60);
             state.MosaicDownsampleFactor = Math.Clamp(state.MosaicDownsampleFactor, 4, 64);
             state.ColorBlocksStripeCount = Math.Clamp(state.ColorBlocksStripeCount, 1, 20);
             return state;

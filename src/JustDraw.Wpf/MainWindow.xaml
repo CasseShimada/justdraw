@@ -220,6 +220,7 @@
                 <MenuItem x:Name="SetImageFolderItem" Header="Set Image Folder..." Click="SetImageFolder_Click" />
                 <MenuItem Header="Recent Paths" x:Name="RecentPathsMenu" />
                 <MenuItem x:Name="DeletePathPlaybackStateItem" Header="Delete Path Playback State..." Click="DeletePathPlaybackState_Click" />
+                <MenuItem x:Name="RandomPlayItem" Header="Random Play" Click="RandomPlay_Click" />
                 <MenuItem x:Name="RefreshRandomItem" Header="Refresh List Order + Random Image" Click="RefreshRandom_Click" />
                 <MenuItem x:Name="ResetCurrentImageStateItem" Header="Reset Current Image State" Click="ResetImageView_Click" />
                 <MenuItem x:Name="ResetCurrentPathImageStatesItem" Header="Reset Current Path Image States" Click="ResetCurrentPathImageStates_Click" />
@@ -239,7 +240,6 @@
                 <MenuItem x:Name="PauseTimerItem" Header="Pause Timer" Click="PauseTimer_Click" />
                 <MenuItem x:Name="SetTimerItem" Header="Set Timer..." Click="SetTimer_Click" />
                 <MenuItem x:Name="ResetTimerItem" Header="Reset Timer" Click="ResetTimer_Click" />
-                <MenuItem x:Name="RandomPlayItem" Header="Random Play" Click="RandomPlay_Click" />
                 <MenuItem x:Name="PrestartCountdownItem" Header="3-second Pre-start Countdown" Click="PrestartCountdown_Click" />
                 <MenuItem x:Name="TimerNotificationItem" Header="Timer Finish Notification" Click="TimerNotification_Click" />
                 <MenuItem x:Name="TimerEndModeMenu" Header="Timer End Mode">
@@ -274,6 +274,7 @@
                     <MenuItem x:Name="ChineseLanguageItem" Header="Chinese" Click="ChineseLanguage_Click" />
                 </MenuItem>
                 <MenuItem x:Name="CheckForUpdatesItem" Header="Check For Updates" Click="CheckForUpdates_Click" />
+                <MenuItem x:Name="VideoFrameBufferItem" Header="Video Frame Buffer..." Click="VideoFrameBuffer_Click" />
                 <MenuItem x:Name="ThemeAccentItem" Header="Theme Accent..." Click="ThemeAccent_Click" />
                 <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
                 <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />

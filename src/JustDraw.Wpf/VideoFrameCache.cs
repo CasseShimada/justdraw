@@ -10,8 +10,9 @@ public sealed record VideoFrameInfo(string Path, double Duration, double Fps, in
 
 public sealed class VideoFrameCache : IDisposable
 {
-    private const int PreloadRadius = 50;
-    private const int MaxCachedFrames = 320;
+    private const int DefaultBufferSeconds = 10;
+    private const int MaxBufferSeconds = 60;
+    private const int MinMaxCachedFrames = 320;
 
     private readonly SemaphoreSlim _extractGate = new(1);
     private readonly ConcurrentDictionary<int, string> _cachedFrames = [];
@@ -22,11 +23,18 @@ public sealed class VideoFrameCache : IDisposable
     private VideoToolsInfo _tools = new("", "", false, "");
     private VideoFrameInfo? _video;
     private string _cacheDirectory = "";
+    private int _bufferSeconds = DefaultBufferSeconds;
     private int _preloadVersion;
     private int _sessionId;
     private CancellationTokenSource? _preloadCts;
 
     public VideoFrameInfo? CurrentVideo => _video;
+
+    public int BufferSeconds
+    {
+        get => _bufferSeconds;
+        set => _bufferSeconds = Math.Clamp(value, 1, MaxBufferSeconds);
+    }
 
     public async Task<VideoFrameInfo> OpenAsync(VideoToolsInfo tools, string path, CancellationToken cancellationToken = default)
     {
@@ -114,8 +122,9 @@ public sealed class VideoFrameCache : IDisposable
         {
             try
             {
-                var start = Math.Max(0, frameIndex - PreloadRadius);
-                var end = Math.Min(video.FrameCount - 1, frameIndex + PreloadRadius);
+                var preloadRadius = BufferFrameRadius(video);
+                var start = Math.Max(0, frameIndex - preloadRadius);
+                var end = Math.Min(video.FrameCount - 1, frameIndex + preloadRadius);
                 var indexes = Enumerable.Range(start, end - start + 1)
                     .OrderBy(index => Math.Abs(index - frameIndex))
                     .ToList();
@@ -300,7 +309,8 @@ public sealed class VideoFrameCache : IDisposable
         {
             _cacheOrder.Remove(currentFrame);
             _cacheOrder.Add(currentFrame);
-            while (_cacheOrder.Count > MaxCachedFrames)
+            var maxCachedFrames = MaxCachedFrames();
+            while (_cacheOrder.Count > maxCachedFrames)
             {
                 toRemove.Add(_cacheOrder[0]);
                 _cacheOrder.RemoveAt(0);
@@ -315,6 +325,10 @@ public sealed class VideoFrameCache : IDisposable
             }
         }
     }
+
+    private int BufferFrameRadius(VideoFrameInfo video) => Math.Max(1, (int)Math.Ceiling(video.Fps * BufferSeconds));
+
+    private int MaxCachedFrames() => Math.Max(MinMaxCachedFrames, (_video is null ? 0 : BufferFrameRadius(_video) * 2 + 32));
 
     private static async Task<VideoFrameInfo> ProbeAsync(string ffprobe, string path, CancellationToken cancellationToken)
     {

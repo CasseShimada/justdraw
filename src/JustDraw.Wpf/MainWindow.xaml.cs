@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         _timerRemaining = ActiveModeState().TimerSeconds;
         _grayscaleDisplayEnabled = _state.GrayscaleDisplayEnabled;
         _sampleImageColorsEnabled = _state.SampleImageColorsEnabled;
+        _videoFrameCache.BufferSeconds = _state.VideoFrameBufferSeconds;
         GeneratePalette();
         LoadSavedSources();
         ApplyMode(_state.AppMode);
@@ -661,16 +662,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        var pathState = modeState.GetPathPlaybackState(source);
         var entries = _imageLibrary.Load(source);
-        RestoreOrder(modeState, entries);
+        RestoreOrder(pathState, entries);
         _entriesByMode[mode] = entries;
         _loadedSources.Add(mode);
         RememberRecentPath(modeState, source);
 
         var index = 0;
-        if (!string.IsNullOrWhiteSpace(modeState.LastImagePath))
+        if (!string.IsNullOrWhiteSpace(pathState.LastImagePath))
         {
-            var found = entries.FindIndex(e => string.Equals(e.Path, modeState.LastImagePath, StringComparison.OrdinalIgnoreCase));
+            var found = entries.FindIndex(e => string.Equals(e.Path, pathState.LastImagePath, StringComparison.OrdinalIgnoreCase));
             if (found >= 0)
             {
                 index = found;
@@ -726,16 +728,22 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void RestoreOrder(ModeState modeState, List<ImageEntry> entries)
+    private static void RestoreOrder(PathPlaybackState pathState, List<ImageEntry> entries)
     {
-        if (entries.Count == 0 || modeState.ImageOrder.Count == 0)
+        if (entries.Count == 0)
         {
+            return;
+        }
+
+        if (!pathState.UseCustomImageOrder || pathState.ImageOrder.Count == 0)
+        {
+            ImageLibrary.SortNatural(entries);
             return;
         }
 
         var lookup = entries.ToDictionary(e => e.Path, StringComparer.OrdinalIgnoreCase);
         var ordered = new List<ImageEntry>();
-        foreach (var savedPath in modeState.ImageOrder)
+        foreach (var savedPath in pathState.ImageOrder)
         {
             if (lookup.Remove(savedPath, out var entry))
             {
@@ -743,7 +751,9 @@ public partial class MainWindow : Window
             }
         }
 
-        ordered.AddRange(lookup.Values.OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase));
+        var newEntries = lookup.Values.ToList();
+        ImageLibrary.SortNatural(newEntries);
+        ordered.AddRange(newEntries);
         entries.Clear();
         entries.AddRange(ordered);
     }
@@ -824,10 +834,8 @@ public partial class MainWindow : Window
         var modeState = ActiveModeState();
         modeState.ImageRootPath = sourcePath;
         _autoPromptedSourceModes.Remove(_state.AppMode);
-        modeState.ImageOrder.Clear();
         _loadedSources.Remove(_state.AppMode);
         LoadSourceForMode(_state.AppMode, showToast: true);
-        CurrentIndex = 0;
         RefreshActiveView();
         UpdateAllUi();
     }
@@ -855,13 +863,13 @@ public partial class MainWindow : Window
             CancelVideoFrameLoad();
             var info = await _videoFrameCache.OpenAsync(_videoTools, sourcePath);
             var modeState = _state.GetModeState(AppMode.VideoFrames);
-            var previousSource = modeState.ImageRootPath;
             modeState.ImageRootPath = sourcePath;
             _autoPromptedSourceModes.Remove(AppMode.VideoFrames);
             modeState.LastImagePath = sourcePath;
-            modeState.VideoFrameIndex = string.Equals(previousSource, sourcePath, StringComparison.OrdinalIgnoreCase)
-                ? Math.Clamp(modeState.VideoFrameIndex, 0, info.FrameCount - 1)
-                : 0;
+            var pathState = modeState.GetPathPlaybackState(sourcePath);
+            pathState.LastImagePath = sourcePath;
+            modeState.VideoFrameIndex = Math.Clamp(pathState.VideoFrameIndex, 0, info.FrameCount - 1);
+            pathState.VideoFrameIndex = modeState.VideoFrameIndex;
             _currentIndexByMode[AppMode.VideoFrames] = modeState.VideoFrameIndex;
             _entriesByMode.Remove(AppMode.VideoFrames);
             _sourceBitmapByMode.Remove(AppMode.VideoFrames);
@@ -978,6 +986,7 @@ public partial class MainWindow : Window
         var modeState = ActiveModeState();
         var frameIndex = Math.Clamp(modeState.VideoFrameIndex, 0, video.FrameCount - 1);
         modeState.VideoFrameIndex = frameIndex;
+        modeState.GetPathPlaybackState(modeState.ImageRootPath).VideoFrameIndex = frameIndex;
         CurrentIndex = frameIndex;
         return frameIndex;
     }
@@ -1095,7 +1104,9 @@ public partial class MainWindow : Window
         {
             var bitmap = LoadBitmap(entry.Path);
             _sourceBitmapByMode[_state.AppMode] = bitmap;
-            ActiveModeState().LastImagePath = entry.Path;
+            var modeState = ActiveModeState();
+            modeState.LastImagePath = entry.Path;
+            modeState.GetPathPlaybackState(modeState.ImageRootPath).LastImagePath = entry.Path;
             ApplyImageEffects();
             ApplyImageViewState();
             QueueImageViewStateClamp();
@@ -1335,6 +1346,7 @@ public partial class MainWindow : Window
             modeState.VideoFrameIndex = (modeState.VideoFrameIndex + delta + video.FrameCount) % video.FrameCount;
         }
 
+        modeState.GetPathPlaybackState(modeState.ImageRootPath).VideoFrameIndex = modeState.VideoFrameIndex;
         CurrentIndex = modeState.VideoFrameIndex;
         RequestVideoFrameDisplay();
         UpdateVideoFrameText();
@@ -1596,6 +1608,7 @@ public partial class MainWindow : Window
         SetMenuChecked(GrayscaleItem, _grayscaleDisplayEnabled);
         SetMenuChecked(SampleImageColorsItem, _sampleImageColorsEnabled);
         SampleImageColorsItem.IsEnabled = IsImageMode;
+        RandomPlayItem.Visibility = IsImageLibraryMode ? Visibility.Visible : Visibility.Collapsed;
         SetMenuChecked(EnglishLanguageItem, !IsChinese);
         SetMenuChecked(ChineseLanguageItem, IsChinese);
         ProtectedVideoExportItem.IsEnabled = _videoTools.Available && !_videoExportBusy;
@@ -1663,6 +1676,9 @@ public partial class MainWindow : Window
         CheckForUpdatesItem.Header = _updateAvailable
             ? T("Update Available - Click to Install", "有可用更新 - 点击安装")
             : T("Check For Updates", "检查更新");
+        VideoFrameBufferItem.Header = T(
+            $"Video Frame Buffer: {_state.VideoFrameBufferSeconds}s...",
+            $"视频逐帧缓冲：{_state.VideoFrameBufferSeconds} 秒...");
         ThemeAccentItem.Header = T("Theme Accent...", "主题色...");
         LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
@@ -2164,9 +2180,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        modeState.RemovePathPlaybackState(path);
         modeState.LastImagePath = "";
         modeState.ImageOrder.Clear();
-        modeState.ImageViewStates.Clear();
         modeState.VideoFrameIndex = 0;
         if (IsVideoFrameMode)
         {
@@ -2206,7 +2222,11 @@ public partial class MainWindow : Window
             (entries[i], entries[j]) = (entries[j], entries[i]);
         }
 
-        ActiveModeState().ImageOrder = entries.Select(e => e.Path).ToList();
+        var modeState = ActiveModeState();
+        var pathState = modeState.GetPathPlaybackState(modeState.ImageRootPath);
+        pathState.UseCustomImageOrder = true;
+        pathState.ImageOrder = entries.Select(e => e.Path).ToList();
+        modeState.ImageOrder = pathState.ImageOrder.ToList();
         CurrentIndex = entries.Count == 0 ? 0 : Random.Shared.Next(entries.Count);
         LoadCurrentImage();
         ShowToast("Random image");
@@ -2492,6 +2512,30 @@ public partial class MainWindow : Window
     private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
     {
         await CheckForUpdatesAsync(manual: true, installIfAvailable: _updateAvailable);
+    }
+
+    private void VideoFrameBuffer_Click(object sender, RoutedEventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            T("Set how many seconds before and after the current video frame should be buffered. Enter 1 to 60.",
+                "设置当前视频帧前后各缓冲多少秒。请输入 1 到 60。"),
+            T("Video Frame Buffer", "视频逐帧缓冲"),
+            _state.VideoFrameBufferSeconds.ToString(CultureInfo.InvariantCulture));
+        if (!int.TryParse(input, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds))
+        {
+            return;
+        }
+
+        seconds = Math.Clamp(seconds, 1, 60);
+        _state.VideoFrameBufferSeconds = seconds;
+        _videoFrameCache.BufferSeconds = seconds;
+        if (IsVideoFrameMode && _videoFrameCache.CurrentVideo is not null)
+        {
+            _videoFrameCache.PreloadAround(Math.Clamp(ActiveModeState().VideoFrameIndex, 0, _videoFrameCache.CurrentVideo.FrameCount - 1));
+        }
+
+        ShowToast(T($"Video frame buffer set to {seconds} seconds", $"视频逐帧缓冲已设置为 {seconds} 秒"));
+        UpdateAllUi();
     }
 
     private void ThemeAccent_Click(object sender, RoutedEventArgs e)
@@ -2854,7 +2898,18 @@ public partial class MainWindow : Window
         {
             if (pair.Key is AppMode.PhotoSwitching or AppMode.ColorPhoto)
             {
-                _state.GetModeState(pair.Key).ImageOrder = pair.Value.Select(entry => entry.Path).ToList();
+                var modeState = _state.GetModeState(pair.Key);
+                if (string.IsNullOrWhiteSpace(modeState.ImageRootPath))
+                {
+                    continue;
+                }
+
+                var pathState = modeState.GetPathPlaybackState(modeState.ImageRootPath);
+                if (pathState.UseCustomImageOrder)
+                {
+                    pathState.ImageOrder = pair.Value.Select(entry => entry.Path).ToList();
+                    modeState.ImageOrder = pathState.ImageOrder.ToList();
+                }
             }
         }
 

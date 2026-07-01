@@ -53,6 +53,8 @@ JustDraw 是一个给绘画练习使用的小工具。它可以随机切换参�
 
 导入视频后，可以使用左右方向键逐帧切换，也可以使用 `随机帧` 跳到随机位置。快速切换时，当前帧编号会立即变化；如果目标帧还在缓冲，画面会暂时停在上一张已经加载好的帧，等目标帧准备好后再更新显示。
 
+视频逐帧模式默认会缓存当前帧前后各 10 秒的画面。可以在 `设置` 菜单中调整缓冲秒数。
+
 ## 图片显示工具
 
 在图片和视频逐帧模式中，可以使用这些显示工具：
@@ -70,6 +72,7 @@ JustDraw 是一个给绘画练习使用的小工具。它可以随机切换参�
 
 - 开启或关闭窗口置顶
 - 切换中文或英文界面
+- 调整视频逐帧缓冲大小
 - 修改主题色
 - 检查更新
 
@@ -104,3 +107,11 @@ JustDraw 免费开源发布在 GitHub 上，付费购买皆为骗局。如有建
 ### 无法使用视频逐帧或视频导出
 
 请确认电脑中可以使用 `ffmpeg` 和 `ffprobe`。视频逐帧和受保护视频导出都依赖它们处理视频文件。
+
+可以从这里下载 FFmpeg：<https://github.com/BtbN/FFmpeg-Builds/releases>
+
+下载并解压后，可以在 PowerShell 中运行下面的命令，把解压目录里的 `bin` 添加到当前用户的系统 PATH：
+
+```powershell
+$root = Read-Host "请输入 FFmpeg 解压目录"; $bin = Join-Path $root "bin"; if (!(Test-Path (Join-Path $bin "ffmpeg.exe"))) { throw "没有找到 bin\ffmpeg.exe，请确认路径是 FFmpeg 的解压目录" }; $path = [Environment]::GetEnvironmentVariable("Path", "User"); if (($path -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable("Path", ($path.TrimEnd(';') + ';' + $bin), "User") }; "已添加到用户 PATH，重新启动 JustDraw 后生效"
+```
