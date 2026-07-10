@@ -261,11 +261,20 @@
             </MenuItem>
             <MenuItem Header="Mosaic" x:Name="MosaicMenu">
                 <MenuItem x:Name="MosaicEnabledItem" Header="Enable Mosaic" Click="MosaicEnabled_Click" />
-                <MenuItem x:Name="MosaicSizeMenu" Header="Mosaic Size">
-                    <MenuItem x:Name="MosaicSmallItem" Header="Small" Click="MosaicSmall_Click" />
-                    <MenuItem x:Name="MosaicMediumItem" Header="Medium" Click="MosaicMedium_Click" />
-                    <MenuItem x:Name="MosaicLargeItem" Header="Large" Click="MosaicLarge_Click" />
-                </MenuItem>
+                <MenuItem x:Name="MosaicSizeItem" Header="Mosaic Size..." Click="MosaicSize_Click" />
+            </MenuItem>
+            <MenuItem x:Name="ViewportMenu" Header="Viewport">
+                <MenuItem x:Name="LockAspectItem" Header="Lock Viewport Aspect Ratio" Click="LockAspect_Click" />
+                <Separator />
+                <MenuItem x:Name="ViewportRatio1x1Item" Header="1:1" Tag="1:1" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio4x3Item" Header="4:3" Tag="4:3" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio3x2Item" Header="3:2" Tag="3:2" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio16x10Item" Header="16:10" Tag="16:10" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio16x9Item" Header="16:9" Tag="16:9" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio21x9Item" Header="21:9" Tag="21:9" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio9x16Item" Header="9:16" Tag="9:16" Click="ViewportPreset_Click" />
+                <Separator />
+                <MenuItem x:Name="ViewportAspectRatioItem" Header="Custom Ratio..." Click="ViewportAspectRatio_Click" />
             </MenuItem>
             <MenuItem x:Name="SettingsMenu" Header="Settings">
                 <MenuItem x:Name="StayOnTopItem" Header="Stay On Top" Click="StayOnTop_Click" />
@@ -276,7 +285,6 @@
                 <MenuItem x:Name="CheckForUpdatesItem" Header="Check For Updates" Click="CheckForUpdates_Click" />
                 <MenuItem x:Name="VideoFrameBufferItem" Header="Video Frame Buffer..." Click="VideoFrameBuffer_Click" />
                 <MenuItem x:Name="ThemeAccentItem" Header="Theme Accent..." Click="ThemeAccent_Click" />
-                <MenuItem x:Name="LockAspectItem" Header="Lock Image Viewport Aspect Ratio" Click="LockAspect_Click" />
                 <MenuItem x:Name="GrayscaleItem" Header="Grayscale Display" Click="Grayscale_Click" />
                 <MenuItem x:Name="SampleImageColorsItem" Header="Sample 30 Image Colors" Click="SampleImageColors_Click" />
                 <Separator />
@@ -285,7 +293,7 @@
             </MenuItem>
         </Menu>
 
-        <Grid x:Name="RootSurface" Background="{DynamicResource AppBackgroundBrush}">
+        <Grid x:Name="RootSurface" Background="{DynamicResource AppBackgroundBrush}" SizeChanged="RootSurface_SizeChanged">
             <Grid x:Name="PhotoSwitchingPage" Background="{DynamicResource AppBackgroundBrush}">
                 <Grid x:Name="PhotoViewport" Background="{DynamicResource AppBackgroundBrush}" ClipToBounds="True"
                       MouseLeftButtonDown="ImageViewport_MouseLeftButtonDown"

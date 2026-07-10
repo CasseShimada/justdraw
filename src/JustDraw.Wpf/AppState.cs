@@ -171,6 +171,7 @@ public sealed class JustDrawState
     public AppMode AppMode { get; set; } = AppMode.PhotoSwitching;
     public bool StayOnTop { get; set; }
     public bool LockImageViewportAspectRatio { get; set; }
+    public double ImageViewportAspectRatio { get; set; } = ViewportAspectRatioLayout.DefaultAspectRatio;
     public bool FlipHorizontal { get; set; }
     public bool FlipVertical { get; set; }
     public string UiLanguage { get; set; } = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("zh", StringComparison.OrdinalIgnoreCase) ? "zh" : "en";
@@ -179,7 +180,7 @@ public sealed class JustDrawState
     public bool GrayscaleDisplayEnabled { get; set; }
     public string ThemeAccentColor { get; set; } = "#0EA5A8";
     public int VideoFrameBufferSeconds { get; set; } = 10;
-    public int MosaicDownsampleFactor { get; set; } = 16;
+    public double MosaicDownsampleFactor { get; set; } = 16;
     public int ColorBlocksStripeCount { get; set; } = 1;
     public double ColorBlocksMinLuma { get; set; } = 0.22;
     public double ColorBlocksMaxLuma { get; set; } = 0.82;
@@ -272,7 +273,13 @@ public static class StateStore
             }
 
             state.VideoFrameBufferSeconds = Math.Clamp(state.VideoFrameBufferSeconds <= 0 ? 10 : state.VideoFrameBufferSeconds, 1, 60);
-            state.MosaicDownsampleFactor = Math.Clamp(state.MosaicDownsampleFactor, 4, 64);
+            state.ImageViewportAspectRatio = ViewportAspectRatioLayout.Normalize(state.ImageViewportAspectRatio);
+            if (double.IsNaN(state.MosaicDownsampleFactor) || double.IsInfinity(state.MosaicDownsampleFactor))
+            {
+                state.MosaicDownsampleFactor = 16;
+            }
+
+            state.MosaicDownsampleFactor = Math.Clamp(state.MosaicDownsampleFactor, 2, 128);
             state.ColorBlocksStripeCount = Math.Clamp(state.ColorBlocksStripeCount, 1, 20);
             return state;
         }

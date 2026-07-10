@@ -22,8 +22,25 @@ using WpfRectangle = System.Windows.Shapes.Rectangle;
 
 namespace JustDraw.Wpf;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IViewportController
 {
+    private const double MosaicMinFactor = 2.0;
+    private const double MosaicMaxFactor = 128.0;
+
+    private static readonly (double Ratio, string Label)[] CommonViewportAspectRatios =
+    [
+        (9.0 / 16.0, "9:16"),
+        (2.0 / 3.0, "2:3"),
+        (3.0 / 4.0, "3:4"),
+        (1.0, "1:1"),
+        (4.0 / 3.0, "4:3"),
+        (3.0 / 2.0, "3:2"),
+        (16.0 / 10.0, "16:10"),
+        (16.0 / 9.0, "16:9"),
+        (21.0 / 9.0, "21:9"),
+        (32.0 / 9.0, "32:9")
+    ];
+
     private readonly JustDrawState _state;
     private readonly ImageLibrary _imageLibrary = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -61,6 +78,7 @@ public partial class MainWindow : Window
     private int _overtimeSeconds;
     private int _countdownRemaining;
     private bool _isDraggingImage;
+    private bool _viewportRefreshQueued;
     private bool _sourceSelectionPromptQueued;
     private bool _sourceSelectionPromptOpen;
     private WpfPoint _dragStart;
@@ -93,6 +111,38 @@ public partial class MainWindow : Window
         ApplyMode(_state.AppMode);
         UpdateAllUi();
         _startupUpdateTimer.Start();
+    }
+
+    public bool IsViewportAspectRatioLocked => _state.LockImageViewportAspectRatio;
+
+    public double ViewportAspectRatio => _state.ImageViewportAspectRatio;
+
+    public IViewportController ViewportController => this;
+
+    public void SetViewportAspectRatio(double width, double height, bool lockAspectRatio = true)
+    {
+        var aspectRatio = ViewportAspectRatioLayout.CalculateAspectRatio(width, height);
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetViewportAspectRatio(width, height, lockAspectRatio));
+            return;
+        }
+
+        _state.ImageViewportAspectRatio = aspectRatio;
+        _state.LockImageViewportAspectRatio = lockAspectRatio;
+        UpdateAllUi();
+    }
+
+    public void SetViewportAspectRatioLock(bool enabled)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetViewportAspectRatioLock(enabled));
+            return;
+        }
+
+        _state.LockImageViewportAspectRatio = enabled;
+        UpdateAllUi();
     }
 
     private ModeState ActiveModeState() => _state.GetModeState(_state.AppMode);
@@ -150,6 +200,77 @@ public partial class MainWindow : Window
     private bool IsChinese => _state.UiLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase);
 
     private string T(string en, string zh) => IsChinese ? zh : en;
+
+    private static string FormatMosaicSize(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+
+    private static string FormatViewportAspectRatio(double aspectRatio)
+    {
+        aspectRatio = ViewportAspectRatioLayout.Normalize(aspectRatio);
+        foreach (var common in CommonViewportAspectRatios)
+        {
+            if (Math.Abs(aspectRatio - common.Ratio) < 0.000001)
+            {
+                return common.Label;
+            }
+        }
+
+        return $"{aspectRatio.ToString("0.###", CultureInfo.InvariantCulture)}:1";
+    }
+
+    private bool IsViewportAspectRatio(double width, double height)
+    {
+        var expected = ViewportAspectRatioLayout.CalculateAspectRatio(width, height);
+        return Math.Abs(_state.ImageViewportAspectRatio - expected) < 0.000001;
+    }
+
+    private static bool TryParseViewportAspectRatio(string value, out double width, out double height)
+    {
+        width = 0;
+        height = 0;
+        var normalized = value.Trim()
+            .Replace('：', ':')
+            .Replace('x', ':')
+            .Replace('X', ':')
+            .Replace('/', ':');
+        var parts = normalized.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1)
+        {
+            if (!TryParsePositiveNumber(parts[0], out width))
+            {
+                return false;
+            }
+
+            height = 1;
+        }
+        else if (parts.Length == 2)
+        {
+            if (!TryParsePositiveNumber(parts[0], out width) || !TryParsePositiveNumber(parts[1], out height))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = ViewportAspectRatioLayout.CalculateAspectRatio(width, height);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParsePositiveNumber(string value, out double number)
+    {
+        var parsed = double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out number)
+            || double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out number);
+        return parsed && double.IsFinite(number) && number > 0;
+    }
 
     private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
 
@@ -557,6 +678,62 @@ public partial class MainWindow : Window
         Height = Math.Clamp(_state.WindowHeight, 320, maxHeight);
     }
 
+    private void ApplyViewportLayout()
+    {
+        var activeViewport = IsImageMode ? ActiveViewport : null;
+        foreach (var viewport in new[] { PhotoViewport, ColorPhotoViewport, VideoFramesViewport })
+        {
+            if (!ReferenceEquals(viewport, activeViewport) || !_state.LockImageViewportAspectRatio)
+            {
+                ResetViewportLayout(viewport);
+            }
+        }
+
+        if (activeViewport is not null && _state.LockImageViewportAspectRatio)
+        {
+            var (width, height) = ViewportAspectRatioLayout.Fit(
+                RootSurface.ActualWidth,
+                RootSurface.ActualHeight,
+                _state.ImageViewportAspectRatio);
+            if (width > 0 && height > 0)
+            {
+                activeViewport.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+                activeViewport.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                activeViewport.Width = width;
+                activeViewport.Height = height;
+            }
+        }
+
+        QueueViewportRefresh();
+    }
+
+    private static void ResetViewportLayout(FrameworkElement viewport)
+    {
+        viewport.ClearValue(WidthProperty);
+        viewport.ClearValue(HeightProperty);
+        viewport.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+        viewport.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+    }
+
+    private void QueueViewportRefresh()
+    {
+        if (_viewportRefreshQueued || _isClosing)
+        {
+            return;
+        }
+
+        _viewportRefreshQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _viewportRefreshQueued = false;
+            RenderSampledImageColors();
+            if (IsImageMode && ActiveImage.Source is not null)
+            {
+                ApplyImageViewState();
+            }
+        }), DispatcherPriority.Loaded);
+    }
+
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
         if (WindowState == WindowState.Normal)
@@ -565,7 +742,13 @@ public partial class MainWindow : Window
             Top = Math.Max(SystemParameters.WorkArea.Top, Math.Min(Top, SystemParameters.WorkArea.Bottom - ActualHeight));
         }
 
+        ApplyViewportLayout();
         QueueSourceSelectionIfNeeded();
+    }
+
+    private void RootSurface_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        ApplyViewportLayout();
     }
 
     private void QueueSourceSelectionIfNeeded()
@@ -1155,11 +1338,11 @@ public partial class MainWindow : Window
         return converted;
     }
 
-    private static BitmapSource CreateMosaic(BitmapSource source, int factor)
+    private static BitmapSource CreateMosaic(BitmapSource source, double factor)
     {
-        factor = Math.Clamp(factor, 4, 64);
-        var smallWidth = Math.Max(8, source.PixelWidth / factor);
-        var smallHeight = Math.Max(8, source.PixelHeight / factor);
+        factor = Math.Clamp(factor, MosaicMinFactor, MosaicMaxFactor);
+        var smallWidth = Math.Max(8, (int)Math.Round(source.PixelWidth / factor));
+        var smallHeight = Math.Max(8, (int)Math.Round(source.PixelHeight / factor));
         var downsampled = new TransformedBitmap(source, new ScaleTransform((double)smallWidth / source.PixelWidth, (double)smallHeight / source.PixelHeight));
         downsampled.Freeze();
         var upsampled = new TransformedBitmap(downsampled, new ScaleTransform((double)source.PixelWidth / smallWidth, (double)source.PixelHeight / smallHeight));
@@ -1605,6 +1788,13 @@ public partial class MainWindow : Window
         SetMenuChecked(MosaicEnabledItem, IsImageMode && ActiveModeState().MosaicEnabled);
         SetMenuChecked(StayOnTopItem, _state.StayOnTop);
         SetMenuChecked(LockAspectItem, _state.LockImageViewportAspectRatio);
+        SetMenuChecked(ViewportRatio1x1Item, IsViewportAspectRatio(1, 1));
+        SetMenuChecked(ViewportRatio4x3Item, IsViewportAspectRatio(4, 3));
+        SetMenuChecked(ViewportRatio3x2Item, IsViewportAspectRatio(3, 2));
+        SetMenuChecked(ViewportRatio16x10Item, IsViewportAspectRatio(16, 10));
+        SetMenuChecked(ViewportRatio16x9Item, IsViewportAspectRatio(16, 9));
+        SetMenuChecked(ViewportRatio21x9Item, IsViewportAspectRatio(21, 9));
+        SetMenuChecked(ViewportRatio9x16Item, IsViewportAspectRatio(9, 16));
         SetMenuChecked(GrayscaleItem, _grayscaleDisplayEnabled);
         SetMenuChecked(SampleImageColorsItem, _sampleImageColorsEnabled);
         SampleImageColorsItem.IsEnabled = IsImageMode;
@@ -1621,6 +1811,7 @@ public partial class MainWindow : Window
         TopMenu.Visibility = _state.StayOnTop ? Visibility.Collapsed : Visibility.Visible;
         ApplyMenuTheme();
         UpdateTimerText();
+        ApplyViewportLayout();
     }
 
     private void ApplyLanguage()
@@ -1662,10 +1853,10 @@ public partial class MainWindow : Window
         CopyColorsItem.Header = T("Copy Colors", "复制颜色");
         MosaicMenu.Header = T("Mosaic", "马赛克");
         MosaicEnabledItem.Header = T("Enable Mosaic", "启用马赛克");
-        MosaicSizeMenu.Header = T("Mosaic Size", "马赛克尺寸");
-        MosaicSmallItem.Header = T("Small", "小");
-        MosaicMediumItem.Header = T("Medium", "中");
-        MosaicLargeItem.Header = T("Large", "大");
+        MosaicSizeItem.Header = T(
+            $"Mosaic Size: {FormatMosaicSize(_state.MosaicDownsampleFactor)}...",
+            $"马赛克尺寸：{FormatMosaicSize(_state.MosaicDownsampleFactor)}...");
+        ViewportMenu.Header = T("Viewport", "视口");
         SettingsMenu.Header = _updateAvailable
             ? T("Settings *", "设置 *")
             : T("Settings", "设置");
@@ -1680,7 +1871,10 @@ public partial class MainWindow : Window
             $"Video Frame Buffer: {_state.VideoFrameBufferSeconds}s...",
             $"视频逐帧缓冲：{_state.VideoFrameBufferSeconds} 秒...");
         ThemeAccentItem.Header = T("Theme Accent...", "主题色...");
-        LockAspectItem.Header = T("Lock Image Viewport Aspect Ratio", "锁定图片视口比例");
+        LockAspectItem.Header = T(
+            $"Lock Viewport Aspect Ratio ({FormatViewportAspectRatio(_state.ImageViewportAspectRatio)})",
+            $"锁定视口比例（{FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}）");
+        ViewportAspectRatioItem.Header = T("Custom Ratio...", "自定义比例...");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
         SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
         OpenSourceNoticeItem.Header = T(
@@ -2438,17 +2632,141 @@ public partial class MainWindow : Window
         UpdateAllUi();
     }
 
-    private void MosaicSmall_Click(object sender, RoutedEventArgs e) => SetMosaicSize(8);
-
-    private void MosaicMedium_Click(object sender, RoutedEventArgs e) => SetMosaicSize(16);
-
-    private void MosaicLarge_Click(object sender, RoutedEventArgs e) => SetMosaicSize(32);
-
-    private void SetMosaicSize(int size)
+    private void MosaicSize_Click(object sender, RoutedEventArgs e)
     {
-        _state.MosaicDownsampleFactor = size;
+        if (!IsImageMode)
+        {
+            return;
+        }
+
+        ShowMosaicSizeDialog();
+    }
+
+    private void ShowMosaicSizeDialog()
+    {
+        var original = ClampMosaicSize(_state.MosaicDownsampleFactor);
+        var accepted = false;
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = T("Mosaic Size", "马赛克尺寸"),
+            Width = 420,
+            Height = 220,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (System.Windows.Media.Brush)Resources["SurfaceBrush"],
+            Topmost = _state.StayOnTop
+        };
+
+        var root = new StackPanel { Margin = new Thickness(18) };
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(new TextBlock
+        {
+            Text = T("Size", "尺寸"),
+            Foreground = (System.Windows.Media.Brush)Resources["TextBrush"],
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var valueText = new TextBlock
+        {
+            Text = FormatMosaicSize(original),
+            Foreground = (System.Windows.Media.Brush)Resources["AccentBrush"],
+            FontSize = 18,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(valueText, 1);
+        header.Children.Add(valueText);
+
+        var slider = new Slider
+        {
+            Minimum = MosaicMinFactor,
+            Maximum = MosaicMaxFactor,
+            Value = original,
+            SmallChange = 0.25,
+            LargeChange = 4,
+            IsSnapToTickEnabled = false,
+            Margin = new Thickness(0, 2, 0, 4),
+            Foreground = (System.Windows.Media.Brush)Resources["AccentBrush"]
+        };
+
+        var range = new Grid { Margin = new Thickness(0, 0, 0, 18) };
+        range.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        range.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        range.Children.Add(new TextBlock
+        {
+            Text = FormatMosaicSize(MosaicMinFactor),
+            Foreground = (System.Windows.Media.Brush)Resources["MutedTextBrush"],
+            FontSize = 12
+        });
+        var maxText = new TextBlock
+        {
+            Text = FormatMosaicSize(MosaicMaxFactor),
+            Foreground = (System.Windows.Media.Brush)Resources["MutedTextBrush"],
+            FontSize = 12
+        };
+        Grid.SetColumn(maxText, 1);
+        range.Children.Add(maxText);
+
+        slider.ValueChanged += (_, _) =>
+        {
+            var value = ClampMosaicSize(slider.Value);
+            valueText.Text = FormatMosaicSize(value);
+            ApplyMosaicSize(value, showToast: false);
+        };
+
+        var actions = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+        var reset = new System.Windows.Controls.Button { Content = T("Default", "默认"), Padding = new Thickness(14, 5, 14, 5), Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new System.Windows.Controls.Button { Content = T("Cancel", "取消"), Padding = new Thickness(14, 5, 14, 5), Margin = new Thickness(0, 0, 8, 0) };
+        var apply = new System.Windows.Controls.Button { Content = T("Apply", "应用"), Padding = new Thickness(16, 5, 16, 5), Background = (System.Windows.Media.Brush)Resources["AccentBrush"], Foreground = System.Windows.Media.Brushes.White };
+        reset.Click += (_, _) => slider.Value = 16;
+        cancel.Click += (_, _) => dialog.DialogResult = false;
+        apply.Click += (_, _) =>
+        {
+            accepted = true;
+            ApplyMosaicSize(slider.Value, showToast: true);
+            UpdateAllUi();
+            dialog.DialogResult = true;
+        };
+        actions.Children.Add(reset);
+        actions.Children.Add(cancel);
+        actions.Children.Add(apply);
+
+        dialog.Closing += (_, _) =>
+        {
+            if (!accepted)
+            {
+                ApplyMosaicSize(original, showToast: false);
+                UpdateAllUi();
+            }
+        };
+
+        root.Children.Add(header);
+        root.Children.Add(slider);
+        root.Children.Add(range);
+        root.Children.Add(actions);
+        dialog.Content = root;
+        dialog.ShowDialog();
+    }
+
+    private void ApplyMosaicSize(double size, bool showToast)
+    {
+        _state.MosaicDownsampleFactor = ClampMosaicSize(size);
         ApplyImageEffects();
-        ShowToast(T("Mosaic size updated", "马赛克尺寸已更新"));
+        if (showToast)
+        {
+            ShowToast(T("Mosaic size updated", "马赛克尺寸已更新"));
+        }
+    }
+
+    private static double ClampMosaicSize(double size)
+    {
+        return double.IsNaN(size) || double.IsInfinity(size)
+            ? 16
+            : Math.Clamp(size, MosaicMinFactor, MosaicMaxFactor);
     }
 
     private void StayOnTop_Click(object sender, RoutedEventArgs e)
@@ -2456,10 +2774,55 @@ public partial class MainWindow : Window
         ToggleStayOnTop();
     }
 
+    private void ViewportPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string value }
+            || !TryParseViewportAspectRatio(value, out var width, out var height))
+        {
+            return;
+        }
+
+        ViewportController.SetViewportAspectRatio(width, height);
+        var label = FormatViewportAspectRatio(_state.ImageViewportAspectRatio);
+        ShowToast(T($"Image viewport locked to {label}", $"图片视口已锁定为 {label}"));
+    }
+
+    private void ViewportAspectRatio_Click(object sender, RoutedEventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            T(
+                "Enter a viewport ratio such as 16:9, 4:3, 1:1, or 1.85. Applying it also enables the aspect-ratio lock.",
+                "请输入视口宽高比，例如 16:9、4:3、1:1 或 1.85。应用后会同时启用比例锁定。"),
+            T("Image Viewport Aspect Ratio", "图片视口比例"),
+            FormatViewportAspectRatio(_state.ImageViewportAspectRatio));
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return;
+        }
+
+        if (!TryParseViewportAspectRatio(input, out var width, out var height))
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                T("Enter a valid positive ratio between 1:100 and 100:1.", "请输入 1:100 到 100:1 之间的有效正数比例。"),
+                T("Invalid Viewport Ratio", "视口比例无效"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        ViewportController.SetViewportAspectRatio(width, height);
+        var label = FormatViewportAspectRatio(_state.ImageViewportAspectRatio);
+        ShowToast(T($"Image viewport locked to {label}", $"图片视口已锁定为 {label}"));
+    }
+
     private void LockAspect_Click(object sender, RoutedEventArgs e)
     {
-        _state.LockImageViewportAspectRatio = !_state.LockImageViewportAspectRatio;
-        UpdateAllUi();
+        var enabled = !_state.LockImageViewportAspectRatio;
+        ViewportController.SetViewportAspectRatioLock(enabled);
+        ShowToast(enabled
+            ? T($"Image viewport locked to {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}", $"图片视口已锁定为 {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}")
+            : T("Image viewport aspect ratio unlocked", "图片视口比例已解锁"));
     }
 
     private void Grayscale_Click(object sender, RoutedEventArgs e)
@@ -2788,11 +3151,45 @@ public partial class MainWindow : Window
 
     private void CopyCurrentImage()
     {
-        if (_displayBitmapByMode.TryGetValue(_state.AppMode, out var bitmap) && bitmap is not null)
+        if (!IsImageMode || ActiveImage.Source is null)
         {
-            System.Windows.Clipboard.SetImage(bitmap);
-            ShowToast(T("Image copied", "图片已复制"));
+            return;
         }
+
+        var bitmap = CaptureActiveViewport();
+        if (bitmap is null)
+        {
+            return;
+        }
+
+        System.Windows.Clipboard.SetImage(bitmap);
+        ShowToast(T("Image copied", "图片已复制"));
+    }
+
+    private BitmapSource? CaptureActiveViewport()
+    {
+        var viewport = ActiveViewport;
+        viewport.UpdateLayout();
+
+        var width = viewport.ActualWidth;
+        var height = viewport.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            return null;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(viewport);
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(width * dpi.DpiScaleX));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(height * dpi.DpiScaleY));
+        var bitmap = new RenderTargetBitmap(
+            pixelWidth,
+            pixelHeight,
+            96.0 * dpi.DpiScaleX,
+            96.0 * dpi.DpiScaleY,
+            PixelFormats.Pbgra32);
+        bitmap.Render(viewport);
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private void CopyCurrentImagePath()
@@ -2876,11 +3273,7 @@ public partial class MainWindow : Window
             _state.WindowHeight = Math.Max(360, (int)Math.Round(Height));
         }
 
-        RenderSampledImageColors();
-        if (IsImageMode && ActiveImage.Source is not null)
-        {
-            ApplyImageViewState();
-        }
+        ApplyViewportLayout();
     }
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
