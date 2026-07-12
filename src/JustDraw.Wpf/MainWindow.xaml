@@ -8,6 +8,7 @@
         Loaded="Window_Loaded"
         Closing="Window_Closing"
         KeyDown="Window_KeyDown"
+        LocationChanged="Window_LocationChanged"
         SizeChanged="Window_SizeChanged">
     <Window.Resources>
         <Style TargetType="Menu">
@@ -216,6 +217,7 @@
 
     <DockPanel LastChildFill="True">
         <Menu x:Name="TopMenu" DockPanel.Dock="Top">
+            <MenuItem x:Name="CompactMenu" Header="Menu" Visibility="Collapsed" />
             <MenuItem Header="File" x:Name="FileMenu">
                 <MenuItem x:Name="SetImageFolderItem" Header="Set Image Folder..." Click="SetImageFolder_Click" />
                 <MenuItem Header="Recent Paths" x:Name="RecentPathsMenu" />
@@ -226,6 +228,19 @@
                 <MenuItem x:Name="ResetCurrentPathImageStatesItem" Header="Reset Current Path Image States" Click="ResetCurrentPathImageStates_Click" />
                 <Separator />
                 <MenuItem x:Name="ExitItem" Header="Exit" Click="Exit_Click" />
+            </MenuItem>
+            <MenuItem x:Name="ViewportMenu" Header="Window Ratio">
+                <MenuItem x:Name="LockAspectItem" Header="Lock Current Window Aspect Ratio" Click="LockAspect_Click" />
+                <Separator />
+                <MenuItem x:Name="ViewportRatio1x1Item" Header="1:1" Tag="1:1" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio4x3Item" Header="4:3" Tag="4:3" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio3x2Item" Header="3:2" Tag="3:2" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio16x10Item" Header="16:10" Tag="16:10" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio16x9Item" Header="16:9" Tag="16:9" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio21x9Item" Header="21:9" Tag="21:9" Click="ViewportPreset_Click" />
+                <MenuItem x:Name="ViewportRatio9x16Item" Header="9:16" Tag="9:16" Click="ViewportPreset_Click" />
+                <Separator />
+                <MenuItem x:Name="ViewportAspectRatioItem" Header="Custom Window Ratio..." Click="ViewportAspectRatio_Click" />
             </MenuItem>
             <MenuItem x:Name="WindowMenu" Header="Window">
                 <MenuItem x:Name="ProtectedVideoExportItem" Header="Protected Video Export..." Click="ProtectedVideoExport_Click" />
@@ -263,19 +278,6 @@
                 <MenuItem x:Name="MosaicEnabledItem" Header="Enable Mosaic" Click="MosaicEnabled_Click" />
                 <MenuItem x:Name="MosaicSizeItem" Header="Mosaic Size..." Click="MosaicSize_Click" />
             </MenuItem>
-            <MenuItem x:Name="ViewportMenu" Header="Viewport">
-                <MenuItem x:Name="LockAspectItem" Header="Lock Viewport Aspect Ratio" Click="LockAspect_Click" />
-                <Separator />
-                <MenuItem x:Name="ViewportRatio1x1Item" Header="1:1" Tag="1:1" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio4x3Item" Header="4:3" Tag="4:3" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio3x2Item" Header="3:2" Tag="3:2" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio16x10Item" Header="16:10" Tag="16:10" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio16x9Item" Header="16:9" Tag="16:9" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio21x9Item" Header="21:9" Tag="21:9" Click="ViewportPreset_Click" />
-                <MenuItem x:Name="ViewportRatio9x16Item" Header="9:16" Tag="9:16" Click="ViewportPreset_Click" />
-                <Separator />
-                <MenuItem x:Name="ViewportAspectRatioItem" Header="Custom Ratio..." Click="ViewportAspectRatio_Click" />
-            </MenuItem>
             <MenuItem x:Name="SettingsMenu" Header="Settings">
                 <MenuItem x:Name="StayOnTopItem" Header="Stay On Top" Click="StayOnTop_Click" />
                 <MenuItem x:Name="LanguageMenu" Header="Language">
@@ -305,15 +307,18 @@
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                     <Canvas x:Name="PhotoSampleColorsCanvas" IsHitTestVisible="False" />
                     <TextBlock x:Name="PhotoEmptyText" Text="Set an image folder to begin"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                               Margin="16" TextAlignment="Center" TextWrapping="Wrap"
                                FontSize="22" Opacity="0.75" />
                 </Grid>
 
                 <Border x:Name="TimerBadge" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Margin="14" Padding="18,9" Background="{DynamicResource TimerBadgeBrush}"
                         BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8">
-                    <TextBlock x:Name="TimerText" Text="00:00" FontSize="24" FontWeight="SemiBold"
-                               MouseLeftButtonUp="TimerText_MouseLeftButtonUp" />
+                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly">
+                        <TextBlock x:Name="TimerText" Text="00:00" FontSize="24" FontWeight="SemiBold"
+                                   MouseLeftButtonUp="TimerText_MouseLeftButtonUp" />
+                    </Viewbox>
                 </Border>
 
                 <Grid x:Name="CountdownOverlay" Background="#CC000000" Visibility="Collapsed">
@@ -326,10 +331,12 @@
                   MouseRightButtonUp="ColorBlocksPage_MouseRightButtonUp"
                   MouseWheel="ColorBlocksPage_MouseWheel">
                 <Canvas x:Name="ColorBlocksCanvas" Background="{DynamicResource AppBackgroundBrush}" SizeChanged="ColorBlocksCanvas_SizeChanged" />
-                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12"
+                <Border x:Name="ColorCountBadge" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12"
                         Padding="12,7" Background="{DynamicResource TimerBadgeBrush}"
                         BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8">
-                    <TextBlock x:Name="ColorCountText" Text="Colors: 1" FontSize="13" />
+                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly">
+                        <TextBlock x:Name="ColorCountText" Text="Colors: 1" FontSize="13" />
+                    </Viewbox>
                 </Border>
             </Grid>
 
@@ -344,7 +351,8 @@
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                     <Canvas x:Name="ColorPhotoSampleColorsCanvas" IsHitTestVisible="False" />
                     <TextBlock x:Name="ColorPhotoEmptyText" Text="Set an image folder to begin"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                               Margin="16" TextAlignment="Center" TextWrapping="Wrap"
                                FontSize="22" Opacity="0.75" />
                 </Grid>
             </Grid>
@@ -360,7 +368,8 @@
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                     <Canvas x:Name="VideoFrameSampleColorsCanvas" IsHitTestVisible="False" />
                     <TextBlock x:Name="VideoFrameEmptyText" Text="Import a video to begin"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                               Margin="16" TextAlignment="Center" TextWrapping="Wrap"
                                FontSize="22" Opacity="0.75" />
                 </Grid>
 
@@ -368,7 +377,9 @@
                         Margin="14" Padding="12,7" Background="{DynamicResource TimerBadgeBrush}"
                         BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8"
                         Visibility="Collapsed">
-                    <TextBlock x:Name="VideoFrameText" Text="Frame 0 / 0" FontSize="13" />
+                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly">
+                        <TextBlock x:Name="VideoFrameText" Text="Frame 0 / 0" FontSize="13" />
+                    </Viewbox>
                 </Border>
             </Grid>
 
@@ -377,7 +388,7 @@
                     Background="{DynamicResource ToastBrush}"
                     BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1"
                     Visibility="Collapsed">
-                <TextBlock x:Name="ToastText" FontSize="13" />
+                <TextBlock x:Name="ToastText" FontSize="13" TextAlignment="Center" TextWrapping="Wrap" />
             </Border>
         </Grid>
     </DockPanel>

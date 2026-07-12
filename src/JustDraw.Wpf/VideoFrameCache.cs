@@ -16,19 +16,41 @@ public sealed class VideoFrameCache : IDisposable
 
     private readonly SemaphoreSlim _extractGate = new(1);
     private readonly ConcurrentDictionary<int, string> _cachedFrames = [];
+    private readonly object _openSync = new();
     private readonly object _sync = new();
     private readonly object _preloadSync = new();
     private readonly List<int> _cacheOrder = [];
+    private readonly Func<string, string, CancellationToken, Task<VideoFrameInfo>> _probeAsync;
 
     private VideoToolsInfo _tools = new("", "", false, "");
     private VideoFrameInfo? _video;
     private string _cacheDirectory = "";
     private int _bufferSeconds = DefaultBufferSeconds;
     private int _preloadVersion;
+    private int _openVersion;
     private int _sessionId;
     private CancellationTokenSource? _preloadCts;
 
-    public VideoFrameInfo? CurrentVideo => _video;
+    public VideoFrameCache()
+        : this(ProbeAsync)
+    {
+    }
+
+    internal VideoFrameCache(Func<string, string, CancellationToken, Task<VideoFrameInfo>> probeAsync)
+    {
+        _probeAsync = probeAsync ?? throw new ArgumentNullException(nameof(probeAsync));
+    }
+
+    public VideoFrameInfo? CurrentVideo
+    {
+        get
+        {
+            lock (_openSync)
+            {
+                return _video;
+            }
+        }
+    }
 
     public int BufferSeconds
     {
@@ -48,68 +70,101 @@ public sealed class VideoFrameCache : IDisposable
             throw new FileNotFoundException("Video does not exist", path);
         }
 
-        Clear();
-        _tools = tools;
-        var info = await ProbeAsync(tools.FfprobePath, path, cancellationToken).ConfigureAwait(false);
-        _video = info;
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "JustDrawVideoFrames_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_cacheDirectory);
-        return info;
+        int openVersion;
+        lock (_openSync)
+        {
+            openVersion = ++_openVersion;
+            ClearCore();
+        }
+
+        var info = await _probeAsync(tools.FfprobePath, path, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "JustDrawVideoFrames_" + Guid.NewGuid().ToString("N"));
+        var committed = false;
+        try
+        {
+            Directory.CreateDirectory(cacheDirectory);
+            lock (_openSync)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (openVersion != _openVersion)
+                {
+                    throw new OperationCanceledException("A newer video open request replaced this request.", cancellationToken);
+                }
+
+                _tools = tools;
+                _video = info;
+                _cacheDirectory = cacheDirectory;
+                committed = true;
+            }
+
+            return info;
+        }
+        finally
+        {
+            if (!committed)
+            {
+                TryDeleteDirectory(cacheDirectory);
+            }
+        }
     }
 
     public async Task<string> GetFrameAsync(int frameIndex, CancellationToken cancellationToken = default)
     {
-        var video = _video ?? throw new InvalidOperationException("No video is open");
-        var index = Math.Clamp(frameIndex, 0, video.FrameCount - 1);
         cancellationToken.ThrowIfCancellationRequested();
-        if (TryGetCachedFrame(index, out var cachedPath))
+        VideoFrameInfo video;
+        string cacheDirectory;
+        string ffmpegPath;
+        int index;
+        int sessionId;
+        lock (_openSync)
         {
-            return cachedPath;
+            video = _video ?? throw new InvalidOperationException("No video is open");
+            index = Math.Clamp(frameIndex, 0, video.FrameCount - 1);
+            if (TryGetCachedFrame(index, out var cachedPath))
+            {
+                return cachedPath;
+            }
+
+            cacheDirectory = _cacheDirectory;
+            ffmpegPath = _tools.FfmpegPath;
+            sessionId = _sessionId;
         }
 
-        var cacheDirectory = _cacheDirectory;
-        var sessionId = _sessionId;
-        var path = await ExtractFrameAsync(video, index, cacheDirectory, sessionId, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (sessionId != Volatile.Read(ref _sessionId))
-        {
-            TryDelete(path);
-            throw new OperationCanceledException();
-        }
-
-        CacheFrame(index, path);
-        return path;
+        var path = await ExtractFrameAsync(video, index, cacheDirectory, ffmpegPath, sessionId, cancellationToken).ConfigureAwait(false);
+        return CommitExtractedFrame(index, path, sessionId, cancellationToken);
     }
 
     public async Task<string> GetFrameForDisplayAsync(int frameIndex, CancellationToken cancellationToken = default)
     {
         CancelPreload();
-        var video = _video ?? throw new InvalidOperationException("No video is open");
-        var index = Math.Clamp(frameIndex, 0, video.FrameCount - 1);
         cancellationToken.ThrowIfCancellationRequested();
-
-        if (TryGetCachedFrame(index, out var cachedPath))
+        VideoFrameInfo video;
+        string cacheDirectory;
+        string ffmpegPath;
+        int index;
+        int sessionId;
+        lock (_openSync)
         {
-            return cachedPath;
+            video = _video ?? throw new InvalidOperationException("No video is open");
+            index = Math.Clamp(frameIndex, 0, video.FrameCount - 1);
+            if (TryGetCachedFrame(index, out var cachedPath))
+            {
+                return cachedPath;
+            }
+
+            cacheDirectory = _cacheDirectory;
+            ffmpegPath = _tools.FfmpegPath;
+            sessionId = _sessionId;
         }
 
-        var cacheDirectory = _cacheDirectory;
-        var sessionId = _sessionId;
-        var path = await ExtractFrameAsync(video, index, cacheDirectory, sessionId, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (sessionId != Volatile.Read(ref _sessionId))
-        {
-            TryDelete(path);
-            throw new OperationCanceledException();
-        }
-
-        CacheFrame(index, path);
-        return path;
+        var path = await ExtractFrameAsync(video, index, cacheDirectory, ffmpegPath, sessionId, cancellationToken).ConfigureAwait(false);
+        return CommitExtractedFrame(index, path, sessionId, cancellationToken);
     }
 
     public void PreloadAround(int frameIndex)
     {
-        var video = _video;
+        var video = CurrentVideo;
         if (video is null)
         {
             return;
@@ -168,6 +223,15 @@ public sealed class VideoFrameCache : IDisposable
 
     public void Clear()
     {
+        lock (_openSync)
+        {
+            _openVersion++;
+            ClearCore();
+        }
+    }
+
+    private void ClearCore()
+    {
         CancelPreload();
         Interlocked.Increment(ref _sessionId);
         foreach (var path in _cachedFrames.Values)
@@ -213,7 +277,13 @@ public sealed class VideoFrameCache : IDisposable
         cts.Dispose();
     }
 
-    private async Task<string> ExtractFrameAsync(VideoFrameInfo video, int frameIndex, string cacheDirectory, int sessionId, CancellationToken cancellationToken)
+    private async Task<string> ExtractFrameAsync(
+        VideoFrameInfo video,
+        int frameIndex,
+        string cacheDirectory,
+        string ffmpegPath,
+        int sessionId,
+        CancellationToken cancellationToken)
     {
         await _extractGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -231,7 +301,7 @@ public sealed class VideoFrameCache : IDisposable
             }
 
             var seconds = frameIndex / video.Fps;
-            await RunProcessAsync(_tools.FfmpegPath, [
+            await RunProcessAsync(ffmpegPath, [
                 "-y",
                 "-hide_banner",
                 "-loglevel", "error",
@@ -242,11 +312,7 @@ public sealed class VideoFrameCache : IDisposable
                 path
             ], cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            if (sessionId == Volatile.Read(ref _sessionId))
-            {
-                TrimCache(frameIndex);
-            }
-            else
+            if (sessionId != Volatile.Read(ref _sessionId))
             {
                 TryDelete(path);
                 TryDeleteDirectory(cacheDirectory);
@@ -263,6 +329,23 @@ public sealed class VideoFrameCache : IDisposable
         finally
         {
             _extractGate.Release();
+        }
+    }
+
+    private string CommitExtractedFrame(int frameIndex, string path, int sessionId, CancellationToken cancellationToken)
+    {
+        lock (_openSync)
+        {
+            if (sessionId != _sessionId)
+            {
+                TryDelete(path);
+                throw new OperationCanceledException("The video session changed while extracting the frame.", cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            CacheFrame(frameIndex, path);
+            TrimCache(frameIndex);
+            return path;
         }
     }
 

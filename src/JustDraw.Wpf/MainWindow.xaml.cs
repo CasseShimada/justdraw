@@ -3,10 +3,12 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Media;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
@@ -24,6 +26,14 @@ namespace JustDraw.Wpf;
 
 public partial class MainWindow : Window, IViewportController
 {
+    private const int WmSizing = 0x0214;
+    private const int WmGetMinMaxInfo = 0x0024;
+    private const int WmDpiChanged = 0x02E0;
+    private const int WmEnterSizeMove = 0x0231;
+    private const int WmExitSizeMove = 0x0232;
+    private const double DefaultWindowMinWidth = 320;
+    private const double DefaultWindowMinHeight = 320;
+    private const double CompactTopMenuHysteresis = 24;
     private const double MosaicMinFactor = 2.0;
     private const double MosaicMaxFactor = 128.0;
 
@@ -60,6 +70,7 @@ public partial class MainWindow : Window, IViewportController
     private readonly List<MediaColor> _palette = [];
     private readonly List<MediaColor> _sampledImageColors = [];
     private readonly Dictionary<MenuItem, bool> _menuCheckedStates = [];
+    private readonly List<MenuItem> _topLevelMenuItems = [];
 
     private bool _grayscaleDisplayEnabled;
     private bool _sampleImageColorsEnabled;
@@ -70,15 +81,29 @@ public partial class MainWindow : Window, IViewportController
     private bool _videoExportBusy;
     private bool _isClosing;
     private int _videoFrameLoadVersion;
+    private int _videoSourceOpenVersion;
     private int _displayedVideoFrameIndex = -1;
     private int _loadingVideoFrameIndex = -1;
     private bool _videoFrameRequestActive;
+    private bool _videoSourceOpenActive;
     private CancellationTokenSource _videoFrameLoadCts = new();
+    private CancellationTokenSource _videoSourceOpenCts = new();
     private int _timerRemaining;
     private int _overtimeSeconds;
     private int _countdownRemaining;
     private bool _isDraggingImage;
     private bool _viewportRefreshQueued;
+    private bool _windowAspectCorrectionQueued;
+    private bool _isApplyingWindowAspectRatio;
+    private AspectRatioDriver _pendingWindowAspectDriver = AspectRatioDriver.Nearest;
+    private AspectRatioDriver _sizingCornerDriver = AspectRatioDriver.Nearest;
+    private AspectRatioInsets _sizingInsetsPhysical;
+    private AspectRatioRect _sizingStartRect;
+    private bool _hasSizingInsets;
+    private bool _isWindowSizing;
+    private bool _isCompactTopMenu;
+    private HwndSource? _windowSource;
+    private IntPtr _windowHandle;
     private bool _sourceSelectionPromptQueued;
     private bool _sourceSelectionPromptOpen;
     private WpfPoint _dragStart;
@@ -89,6 +114,16 @@ public partial class MainWindow : Window, IViewportController
     {
         _state = StateStore.Load();
         InitializeComponent();
+        _topLevelMenuItems.AddRange([
+            FileMenu,
+            ViewportMenu,
+            WindowMenu,
+            ModeMenu,
+            TimerMenu,
+            ColorToolsMenu,
+            MosaicMenu,
+            SettingsMenu
+        ]);
         if (_state.AppMode == AppMode.VideoFrames && !_videoTools.Available)
         {
             _state.AppMode = AppMode.PhotoSwitching;
@@ -117,6 +152,14 @@ public partial class MainWindow : Window, IViewportController
 
     public double ViewportAspectRatio => _state.ImageViewportAspectRatio;
 
+    public double ViewportWidth => Dispatcher.CheckAccess()
+        ? RootSurface?.ActualWidth ?? 0
+        : Dispatcher.Invoke(() => RootSurface?.ActualWidth ?? 0);
+
+    public double ViewportHeight => Dispatcher.CheckAccess()
+        ? RootSurface?.ActualHeight ?? 0
+        : Dispatcher.Invoke(() => RootSurface?.ActualHeight ?? 0);
+
     public IViewportController ViewportController => this;
 
     public void SetViewportAspectRatio(double width, double height, bool lockAspectRatio = true)
@@ -128,9 +171,27 @@ public partial class MainWindow : Window, IViewportController
             return;
         }
 
+        var wasMaximized = WindowState == WindowState.Maximized;
         _state.ImageViewportAspectRatio = aspectRatio;
         _state.LockImageViewportAspectRatio = lockAspectRatio;
+        if (!lockAspectRatio)
+        {
+            ResetLockedWindowSizing();
+        }
+
+        UpdateWindowMinimumsForAspectRatio();
+        RefreshMaximizedWindow(wasMaximized);
         UpdateAllUi();
+        if (lockAspectRatio)
+        {
+            QueueWindowAspectCorrection(AspectRatioDriver.Nearest);
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => KeepWindowWithinWorkArea(GetCurrentWorkAreaInDips())),
+                DispatcherPriority.Loaded);
+        }
     }
 
     public void SetViewportAspectRatioLock(bool enabled)
@@ -141,8 +202,41 @@ public partial class MainWindow : Window, IViewportController
             return;
         }
 
+        var wasMaximized = WindowState == WindowState.Maximized;
+        if (enabled && !_state.LockImageViewportAspectRatio)
+        {
+            _state.ImageViewportAspectRatio = ResolveCurrentViewportAspectRatio();
+        }
+
         _state.LockImageViewportAspectRatio = enabled;
+        if (!enabled)
+        {
+            ResetLockedWindowSizing();
+        }
+
+        UpdateWindowMinimumsForAspectRatio();
+        RefreshMaximizedWindow(wasMaximized);
         UpdateAllUi();
+        if (enabled)
+        {
+            QueueWindowAspectCorrection(AspectRatioDriver.Nearest);
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => KeepWindowWithinWorkArea(GetCurrentWorkAreaInDips())),
+                DispatcherPriority.Loaded);
+        }
+    }
+
+    public void SetViewportWidth(double width)
+    {
+        SetViewportDimension(width, AspectRatioDriver.Width);
+    }
+
+    public void SetViewportHeight(double height)
+    {
+        SetViewportDimension(height, AspectRatioDriver.Height);
     }
 
     private ModeState ActiveModeState() => _state.GetModeState(_state.AppMode);
@@ -223,54 +317,8 @@ public partial class MainWindow : Window, IViewportController
         return Math.Abs(_state.ImageViewportAspectRatio - expected) < 0.000001;
     }
 
-    private static bool TryParseViewportAspectRatio(string value, out double width, out double height)
-    {
-        width = 0;
-        height = 0;
-        var normalized = value.Trim()
-            .Replace('：', ':')
-            .Replace('x', ':')
-            .Replace('X', ':')
-            .Replace('/', ':');
-        var parts = normalized.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 1)
-        {
-            if (!TryParsePositiveNumber(parts[0], out width))
-            {
-                return false;
-            }
-
-            height = 1;
-        }
-        else if (parts.Length == 2)
-        {
-            if (!TryParsePositiveNumber(parts[0], out width) || !TryParsePositiveNumber(parts[1], out height))
-            {
-                return false;
-            }
-        }
-        else
-        {
-            return false;
-        }
-
-        try
-        {
-            _ = ViewportAspectRatioLayout.CalculateAspectRatio(width, height);
-            return true;
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryParsePositiveNumber(string value, out double number)
-    {
-        var parsed = double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out number)
-            || double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out number);
-        return parsed && double.IsFinite(number) && number > 0;
-    }
+    private static bool TryParseViewportAspectRatio(string value, out double width, out double height) =>
+        ViewportAspectRatioLayout.TryParse(value, out width, out height);
 
     private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
 
@@ -494,6 +542,7 @@ public partial class MainWindow : Window, IViewportController
 
     private void StyleMenuItem(MenuItem item)
     {
+        var hasCheckedState = _menuCheckedStates.ContainsKey(item);
         var isChecked = _menuCheckedStates.TryGetValue(item, out var checkedState) && checkedState;
         var isUpdatePrompt = IsUpdatePromptItem(item);
         var isTopLevel = item.Parent is Menu;
@@ -503,8 +552,8 @@ public partial class MainWindow : Window, IViewportController
         item.Foreground = isUpdatePrompt
             ? (System.Windows.Media.Brush)Resources["AccentArrowBrush"]
             : (System.Windows.Media.Brush)Resources["TextBrush"];
-        item.IsCheckable = false;
-        item.IsChecked = false;
+        item.IsCheckable = hasCheckedState;
+        item.IsChecked = isChecked;
         item.BorderBrush = isUpdatePrompt
             ? (System.Windows.Media.Brush)Resources["AccentBrush"]
             : System.Windows.Media.Brushes.Transparent;
@@ -672,47 +721,578 @@ public partial class MainWindow : Window, IViewportController
     private void ApplySafeStartupSize()
     {
         var workArea = SystemParameters.WorkArea;
-        var maxWidth = Math.Max(320, workArea.Width - 40);
-        var maxHeight = Math.Max(320, workArea.Height - 40);
-        Width = Math.Clamp(_state.WindowWidth, 320, maxWidth);
-        Height = Math.Clamp(_state.WindowHeight, 320, maxHeight);
+        var maxWidth = Math.Max(MinWidth, workArea.Width - 40);
+        var maxHeight = Math.Max(MinHeight, workArea.Height - 40);
+        Width = Math.Clamp(_state.WindowWidth, MinWidth, maxWidth);
+        Height = Math.Clamp(_state.WindowHeight, MinHeight, maxHeight);
     }
 
-    private void ApplyViewportLayout()
+    protected override void OnSourceInitialized(EventArgs e)
     {
-        var activeViewport = IsImageMode ? ActiveViewport : null;
+        base.OnSourceInitialized(e);
+        _windowHandle = new WindowInteropHelper(this).Handle;
+        _windowSource = HwndSource.FromHwnd(_windowHandle);
+        _windowSource?.AddHook(WindowProc);
+        UpdateWindowMinimumsForAspectRatio();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _windowSource?.RemoveHook(WindowProc);
+        _windowSource = null;
+        _windowHandle = IntPtr.Zero;
+        base.OnClosed(e);
+    }
+
+    private IntPtr WindowProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message == WmGetMinMaxInfo
+            && _state.LockImageViewportAspectRatio
+            && TryApplyLockedMinMaxInfo(hwnd, lParam))
+        {
+            handled = true;
+            return IntPtr.Zero;
+        }
+        else if (message == WmEnterSizeMove && _state.LockImageViewportAspectRatio)
+        {
+            BeginLockedWindowSizing();
+        }
+        else if (message == WmSizing
+            && _state.LockImageViewportAspectRatio
+            && WindowState == WindowState.Normal
+            && TryGetLockedSizingInsets(out var insets, out var dpi))
+        {
+            var edge = (WindowSizingEdge)wParam.ToInt32();
+            if (Enum.IsDefined(edge))
+            {
+                var native = Marshal.PtrToStructure<NativeRect>(lParam);
+                var requested = new AspectRatioRect(native.Left, native.Top, native.Right, native.Bottom);
+                var cornerDriver = ResolveSizingCornerDriver(edge, requested);
+                var physicalAspectRatio = _state.ImageViewportAspectRatio * dpi.DpiScaleX / dpi.DpiScaleY;
+                var workArea = Forms.Screen.FromHandle(hwnd).WorkingArea;
+                UpdateWindowMinimumsForAspectRatio(
+                    new Rect(
+                        workArea.Left / dpi.DpiScaleX,
+                        workArea.Top / dpi.DpiScaleY,
+                        workArea.Width / dpi.DpiScaleX,
+                        workArea.Height / dpi.DpiScaleY),
+                    new AspectRatioInsets(insets.Width / dpi.DpiScaleX, insets.Height / dpi.DpiScaleY));
+                var constrained = ViewportAspectRatioLayout.ConstrainSizingRect(
+                    requested,
+                    edge,
+                    physicalAspectRatio,
+                    insets,
+                    MinWidth * dpi.DpiScaleX,
+                    MinHeight * dpi.DpiScaleY,
+                    cornerDriver,
+                    workArea.Width,
+                    workArea.Height,
+                    new AspectRatioRect(workArea.Left, workArea.Top, workArea.Right, workArea.Bottom));
+                native.Left = (int)Math.Round(constrained.Left);
+                native.Top = (int)Math.Round(constrained.Top);
+                native.Right = (int)Math.Round(constrained.Right);
+                native.Bottom = (int)Math.Round(constrained.Bottom);
+                Marshal.StructureToPtr(native, lParam, false);
+                handled = true;
+                return new IntPtr(1);
+            }
+        }
+        else if (message == WmExitSizeMove && _isWindowSizing)
+        {
+            EndLockedWindowSizing();
+        }
+        else if (message == WmDpiChanged && _state.LockImageViewportAspectRatio)
+        {
+            var wasSizing = _isWindowSizing;
+            var cornerDriver = _sizingCornerDriver;
+            ResetLockedWindowSizing();
+            _isWindowSizing = wasSizing;
+            _sizingCornerDriver = cornerDriver;
+            if (wasSizing && lParam != IntPtr.Zero)
+            {
+                var suggested = Marshal.PtrToStructure<NativeRect>(lParam);
+                _sizingStartRect = new AspectRatioRect(suggested.Left, suggested.Top, suggested.Right, suggested.Bottom);
+            }
+
+            if (!wasSizing)
+            {
+                QueueWindowAspectCorrection(AspectRatioDriver.Nearest);
+            }
+        }
+        return IntPtr.Zero;
+    }
+
+    private bool TryApplyLockedMinMaxInfo(IntPtr hwnd, IntPtr lParam)
+    {
+        if (lParam == IntPtr.Zero || !TryGetPhysicalWindowInsets(out var insets, out var dpi))
+        {
+            return false;
+        }
+
+        var screen = Forms.Screen.FromHandle(hwnd);
+        var workArea = screen.WorkingArea;
+        var monitorBounds = screen.Bounds;
+        var physicalAspectRatio = _state.ImageViewportAspectRatio * dpi.DpiScaleX / dpi.DpiScaleY;
+        var size = ViewportAspectRatioLayout.ConstrainOuterSize(
+            workArea.Width,
+            workArea.Height,
+            physicalAspectRatio,
+            insets,
+            MinWidth * dpi.DpiScaleX,
+            MinHeight * dpi.DpiScaleY,
+            workArea.Width,
+            workArea.Height,
+            AspectRatioDriver.Nearest);
+        var minMaxInfo = Marshal.PtrToStructure<NativeMinMaxInfo>(lParam);
+        minMaxInfo.MaxPosition.X = workArea.Left - monitorBounds.Left + (int)Math.Round((workArea.Width - size.Width) / 2);
+        minMaxInfo.MaxPosition.Y = workArea.Top - monitorBounds.Top + (int)Math.Round((workArea.Height - size.Height) / 2);
+        minMaxInfo.MaxSize.X = (int)Math.Round(size.Width);
+        minMaxInfo.MaxSize.Y = (int)Math.Round(size.Height);
+        minMaxInfo.MinTrackSize.X = Math.Max(minMaxInfo.MinTrackSize.X, (int)Math.Ceiling(MinWidth * dpi.DpiScaleX));
+        minMaxInfo.MinTrackSize.Y = Math.Max(minMaxInfo.MinTrackSize.Y, (int)Math.Ceiling(MinHeight * dpi.DpiScaleY));
+        minMaxInfo.MaxTrackSize.X = workArea.Width;
+        minMaxInfo.MaxTrackSize.Y = workArea.Height;
+        Marshal.StructureToPtr(minMaxInfo, lParam, false);
+        return true;
+    }
+
+    private void BeginLockedWindowSizing()
+    {
+        UpdateWindowMinimumsForAspectRatio();
+        ResetLockedWindowSizing();
+        _isWindowSizing = true;
+        _hasSizingInsets = TryGetPhysicalWindowInsets(out _sizingInsetsPhysical, out _);
+        if (_windowHandle != IntPtr.Zero && GetWindowRect(_windowHandle, out var rect))
+        {
+            _sizingStartRect = new AspectRatioRect(rect.Left, rect.Top, rect.Right, rect.Bottom);
+        }
+    }
+
+    private void EndLockedWindowSizing()
+    {
+        var spansMultipleScreens = IsWindowSpanningMultipleScreens();
+        ResetLockedWindowSizing();
+        if (!spansMultipleScreens)
+        {
+            QueueWindowAspectCorrection(AspectRatioDriver.Nearest);
+        }
+    }
+
+    private bool IsWindowSpanningMultipleScreens()
+    {
+        if (_windowHandle == IntPtr.Zero || !GetWindowRect(_windowHandle, out var rect))
+        {
+            return false;
+        }
+
+        var windowBounds = System.Drawing.Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
+        return Forms.Screen.AllScreens.Count(screen => screen.Bounds.IntersectsWith(windowBounds)) > 1;
+    }
+
+    private void ResetLockedWindowSizing()
+    {
+        _hasSizingInsets = false;
+        _sizingInsetsPhysical = default;
+        _sizingStartRect = default;
+        _sizingCornerDriver = AspectRatioDriver.Nearest;
+        _isWindowSizing = false;
+    }
+
+    private bool TryGetLockedSizingInsets(out AspectRatioInsets insets, out DpiScale dpi)
+    {
+        dpi = VisualTreeHelper.GetDpi(this);
+        if (_hasSizingInsets)
+        {
+            insets = _sizingInsetsPhysical;
+            return true;
+        }
+
+        if (!TryGetPhysicalWindowInsets(out insets, out dpi))
+        {
+            return false;
+        }
+
+        _sizingInsetsPhysical = insets;
+        _hasSizingInsets = true;
+        return true;
+    }
+
+    private AspectRatioDriver ResolveSizingCornerDriver(WindowSizingEdge edge, AspectRatioRect requested)
+    {
+        if (edge is WindowSizingEdge.Left or WindowSizingEdge.Right)
+        {
+            return AspectRatioDriver.Width;
+        }
+
+        if (edge is WindowSizingEdge.Top or WindowSizingEdge.Bottom)
+        {
+            return AspectRatioDriver.Height;
+        }
+
+        if (_sizingCornerDriver != AspectRatioDriver.Nearest || _sizingStartRect.Width <= 0 || _sizingStartRect.Height <= 0)
+        {
+            return _sizingCornerDriver;
+        }
+
+        var widthDelta = Math.Abs(requested.Width - _sizingStartRect.Width);
+        var heightDelta = Math.Abs(requested.Height - _sizingStartRect.Height);
+        if (Math.Max(widthDelta, heightDelta) >= 1)
+        {
+            _sizingCornerDriver = widthDelta >= heightDelta
+                ? AspectRatioDriver.Width
+                : AspectRatioDriver.Height;
+        }
+
+        return _sizingCornerDriver;
+    }
+
+    private void EnsureImageViewportsFillRootSurface()
+    {
         foreach (var viewport in new[] { PhotoViewport, ColorPhotoViewport, VideoFramesViewport })
         {
-            if (!ReferenceEquals(viewport, activeViewport) || !_state.LockImageViewportAspectRatio)
-            {
-                ResetViewportLayout(viewport);
-            }
+            viewport.ClearValue(WidthProperty);
+            viewport.ClearValue(HeightProperty);
+            viewport.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+            viewport.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
         }
-
-        if (activeViewport is not null && _state.LockImageViewportAspectRatio)
-        {
-            var (width, height) = ViewportAspectRatioLayout.Fit(
-                RootSurface.ActualWidth,
-                RootSurface.ActualHeight,
-                _state.ImageViewportAspectRatio);
-            if (width > 0 && height > 0)
-            {
-                activeViewport.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
-                activeViewport.VerticalAlignment = System.Windows.VerticalAlignment.Center;
-                activeViewport.Width = width;
-                activeViewport.Height = height;
-            }
-        }
-
-        QueueViewportRefresh();
     }
 
-    private static void ResetViewportLayout(FrameworkElement viewport)
+    private double ResolveCurrentViewportAspectRatio()
     {
-        viewport.ClearValue(WidthProperty);
-        viewport.ClearValue(HeightProperty);
-        viewport.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
-        viewport.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+        var imageWidth = 0.0;
+        var imageHeight = 0.0;
+        if (IsImageMode && ActiveImage.Source is BitmapSource source)
+        {
+            imageWidth = source.PixelWidth;
+            imageHeight = source.PixelHeight;
+        }
+
+        return ViewportAspectRatioLayout.ResolveAspectRatio(
+            RootSurface?.ActualWidth ?? 0,
+            RootSurface?.ActualHeight ?? 0,
+            imageWidth,
+            imageHeight,
+            _state.ImageViewportAspectRatio);
+    }
+
+    private void SetViewportDimension(double value, AspectRatioDriver driver)
+    {
+        if (!double.IsFinite(value) || value <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), "Viewport dimensions must be finite positive numbers.");
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetViewportDimension(value, driver));
+            return;
+        }
+
+        if (!IsLoaded)
+        {
+            void ApplyAfterLoad(object? sender, RoutedEventArgs args)
+            {
+                Loaded -= ApplyAfterLoad;
+                SetViewportDimension(value, driver);
+            }
+
+            Loaded += ApplyAfterLoad;
+            return;
+        }
+
+        if (WindowState != WindowState.Normal)
+        {
+            WindowState = WindowState.Normal;
+            Dispatcher.BeginInvoke(
+                new Action(() => SetViewportDimension(value, driver)),
+                DispatcherPriority.Loaded);
+            return;
+        }
+
+        var insets = GetWindowInsetsInDips();
+        var workArea = GetCurrentWorkAreaInDips();
+        if (!_state.LockImageViewportAspectRatio)
+        {
+            var targetSize = GetCurrentWindowSizeInDips();
+            _isApplyingWindowAspectRatio = true;
+            try
+            {
+                if (driver == AspectRatioDriver.Width)
+                {
+                    var targetWidth = Math.Clamp(value + insets.Width, MinWidth, Math.Max(MinWidth, workArea.Width));
+                    Width = targetWidth;
+                    targetSize = targetSize with { Width = targetWidth };
+                }
+                else
+                {
+                    var targetHeight = Math.Clamp(value + insets.Height, MinHeight, Math.Max(MinHeight, workArea.Height));
+                    Height = targetHeight;
+                    targetSize = targetSize with { Height = targetHeight };
+                }
+            }
+            finally
+            {
+                _isApplyingWindowAspectRatio = false;
+            }
+
+            KeepWindowWithinWorkArea(workArea, targetSize);
+
+            return;
+        }
+
+        var currentSize = GetCurrentWindowSizeInDips();
+        var requestedWidth = driver == AspectRatioDriver.Width ? value + insets.Width : currentSize.Width;
+        var requestedHeight = driver == AspectRatioDriver.Height ? value + insets.Height : currentSize.Height;
+        ApplyConstrainedWindowSize(requestedWidth, requestedHeight, driver);
+    }
+
+    private void QueueWindowAspectCorrection(AspectRatioDriver driver)
+    {
+        if (!_state.LockImageViewportAspectRatio || _isClosing || _isWindowSizing)
+        {
+            return;
+        }
+
+        _pendingWindowAspectDriver = driver;
+        if (_windowAspectCorrectionQueued)
+        {
+            return;
+        }
+
+        _windowAspectCorrectionQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _windowAspectCorrectionQueued = false;
+            var pendingDriver = _pendingWindowAspectDriver;
+            _pendingWindowAspectDriver = AspectRatioDriver.Nearest;
+            EnsureWindowAspectRatio(pendingDriver);
+        }), DispatcherPriority.Loaded);
+    }
+
+    private void EnsureWindowAspectRatio(AspectRatioDriver driver)
+    {
+        if (!_state.LockImageViewportAspectRatio
+            || _isApplyingWindowAspectRatio
+            || !IsLoaded
+            || WindowState == WindowState.Minimized
+            || RootSurface.ActualWidth <= 0
+            || RootSurface.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        if (WindowState == WindowState.Maximized)
+        {
+            UpdateWindowMinimumsForAspectRatio();
+            return;
+        }
+
+        UpdateWindowMinimumsForAspectRatio();
+
+        if (ViewportAspectRatioLayout.Matches(
+            RootSurface.ActualWidth,
+            RootSurface.ActualHeight,
+            _state.ImageViewportAspectRatio))
+        {
+            KeepWindowWithinWorkArea(GetCurrentWorkAreaInDips());
+            return;
+        }
+
+        var currentSize = GetCurrentWindowSizeInDips();
+        ApplyConstrainedWindowSize(currentSize.Width, currentSize.Height, driver);
+    }
+
+    private void ApplyConstrainedWindowSize(double requestedWidth, double requestedHeight, AspectRatioDriver driver)
+    {
+        var workArea = GetCurrentWorkAreaInDips();
+        var insets = GetWindowInsetsInDips();
+        UpdateWindowMinimumsForAspectRatio(workArea, insets);
+        var size = ViewportAspectRatioLayout.ConstrainOuterSize(
+            requestedWidth,
+            requestedHeight,
+            _state.ImageViewportAspectRatio,
+            insets,
+            MinWidth,
+            MinHeight,
+            Math.Max(MinWidth, workArea.Width),
+            Math.Max(MinHeight, workArea.Height),
+            driver);
+        ApplyWindowSize(size);
+    }
+
+    private void ApplyWindowSize(AspectRatioSize size)
+    {
+        if (!double.IsFinite(size.Width)
+            || !double.IsFinite(size.Height)
+            || size.Width <= 0
+            || size.Height <= 0)
+        {
+            return;
+        }
+
+        _isApplyingWindowAspectRatio = true;
+        try
+        {
+            if (WindowState != WindowState.Normal)
+            {
+                WindowState = WindowState.Normal;
+            }
+
+            var currentSize = GetCurrentWindowSizeInDips();
+            if (Math.Abs(currentSize.Width - size.Width) > 0.25)
+            {
+                Width = size.Width;
+            }
+
+            if (Math.Abs(currentSize.Height - size.Height) > 0.25)
+            {
+                Height = size.Height;
+            }
+        }
+        finally
+        {
+            _isApplyingWindowAspectRatio = false;
+        }
+        KeepWindowWithinWorkArea(GetCurrentWorkAreaInDips(), size);
+    }
+
+    private AspectRatioInsets GetWindowInsetsInDips()
+    {
+        if (RootSurface is null || RootSurface.ActualWidth <= 0 || RootSurface.ActualHeight <= 0)
+        {
+            return new AspectRatioInsets(0, 0);
+        }
+
+        var currentSize = GetCurrentWindowSizeInDips();
+        return new AspectRatioInsets(
+            Math.Max(0, currentSize.Width - RootSurface.ActualWidth),
+            Math.Max(0, currentSize.Height - RootSurface.ActualHeight));
+    }
+
+    private AspectRatioSize GetCurrentWindowSizeInDips()
+    {
+        var width = double.IsFinite(ActualWidth) && ActualWidth > 0 ? ActualWidth : Width;
+        var height = double.IsFinite(ActualHeight) && ActualHeight > 0 ? ActualHeight : Height;
+        return new AspectRatioSize(width, height);
+    }
+
+    private Rect GetCurrentWorkAreaInDips()
+    {
+        if (_windowHandle == IntPtr.Zero)
+        {
+            return SystemParameters.WorkArea;
+        }
+
+        var area = Forms.Screen.FromHandle(_windowHandle).WorkingArea;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        return new Rect(
+            area.Left / dpi.DpiScaleX,
+            area.Top / dpi.DpiScaleY,
+            area.Width / dpi.DpiScaleX,
+            area.Height / dpi.DpiScaleY);
+    }
+
+    private void KeepWindowWithinWorkArea(Rect workArea, AspectRatioSize? targetSize = null)
+    {
+        if (!IsLoaded || WindowState != WindowState.Normal)
+        {
+            return;
+        }
+
+        var currentSize = targetSize ?? GetCurrentWindowSizeInDips();
+        var maxLeft = Math.Max(workArea.Left, workArea.Right - currentSize.Width);
+        var maxTop = Math.Max(workArea.Top, workArea.Bottom - currentSize.Height);
+        Left = Math.Clamp(double.IsFinite(Left) ? Left : workArea.Left, workArea.Left, maxLeft);
+        Top = Math.Clamp(double.IsFinite(Top) ? Top : workArea.Top, workArea.Top, maxTop);
+    }
+
+    private void RefreshMaximizedWindow(bool wasMaximized)
+    {
+        if (!wasMaximized)
+        {
+            return;
+        }
+
+        _isApplyingWindowAspectRatio = true;
+        WindowState = WindowState.Normal;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (!_isClosing)
+                {
+                    WindowState = WindowState.Maximized;
+                }
+            }
+            finally
+            {
+                _isApplyingWindowAspectRatio = false;
+            }
+        }), DispatcherPriority.Loaded);
+    }
+
+    private void UpdateWindowMinimumsForAspectRatio()
+    {
+        UpdateWindowMinimumsForAspectRatio(GetCurrentWorkAreaInDips(), GetWindowInsetsInDips());
+    }
+
+    private void UpdateWindowMinimumsForAspectRatio(Rect workArea, AspectRatioInsets insets)
+    {
+        var minWidth = DefaultWindowMinWidth;
+        var minHeight = DefaultWindowMinHeight;
+        if (_state.LockImageViewportAspectRatio
+            && double.IsFinite(workArea.Width)
+            && double.IsFinite(workArea.Height)
+            && workArea.Width > 0
+            && workArea.Height > 0)
+        {
+            var minimumSize = ViewportAspectRatioLayout.CalculateMinimumOuterSize(
+                _state.ImageViewportAspectRatio,
+                insets,
+                DefaultWindowMinWidth,
+                DefaultWindowMinHeight,
+                workArea.Width,
+                workArea.Height);
+            minWidth = minimumSize.Width;
+            minHeight = minimumSize.Height;
+        }
+
+        minWidth = Math.Max(1, minWidth);
+        minHeight = Math.Max(1, minHeight);
+        if (Math.Abs(MinWidth - minWidth) <= 0.01 && Math.Abs(MinHeight - minHeight) <= 0.01)
+        {
+            return;
+        }
+
+        var wasApplying = _isApplyingWindowAspectRatio;
+        _isApplyingWindowAspectRatio = true;
+        try
+        {
+            MinWidth = minWidth;
+            MinHeight = minHeight;
+        }
+        finally
+        {
+            _isApplyingWindowAspectRatio = wasApplying;
+        }
+    }
+
+    private bool TryGetPhysicalWindowInsets(out AspectRatioInsets insets, out DpiScale dpi)
+    {
+        dpi = VisualTreeHelper.GetDpi(this);
+        insets = default;
+        if (_windowHandle == IntPtr.Zero
+            || RootSurface.ActualWidth <= 0
+            || RootSurface.ActualHeight <= 0
+            || !GetWindowRect(_windowHandle, out var rect))
+        {
+            return false;
+        }
+
+        insets = new AspectRatioInsets(
+            Math.Max(0, rect.Right - rect.Left - RootSurface.ActualWidth * dpi.DpiScaleX),
+            Math.Max(0, rect.Bottom - rect.Top - RootSurface.ActualHeight * dpi.DpiScaleY));
+        return true;
     }
 
     private void QueueViewportRefresh()
@@ -734,21 +1314,100 @@ public partial class MainWindow : Window, IViewportController
         }), DispatcherPriority.Loaded);
     }
 
-    private void Window_Loaded(object sender, RoutedEventArgs e)
+    private double CalculateTopMenuRequiredWidth()
     {
-        if (WindowState == WindowState.Normal)
+        var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var requiredWidth = TopMenu.Padding.Left + TopMenu.Padding.Right + 4;
+        foreach (var item in _topLevelMenuItems.Where(item => item.Visibility == Visibility.Visible))
         {
-            Left = Math.Max(SystemParameters.WorkArea.Left, Math.Min(Left, SystemParameters.WorkArea.Right - ActualWidth));
-            Top = Math.Max(SystemParameters.WorkArea.Top, Math.Min(Top, SystemParameters.WorkArea.Bottom - ActualHeight));
+            var text = item.Header?.ToString() ?? "";
+            var typeface = new Typeface(item.FontFamily, item.FontStyle, item.FontWeight, item.FontStretch);
+            var formatted = new FormattedText(
+                text,
+                CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight,
+                typeface,
+                item.FontSize,
+                MediaBrushes.Transparent,
+                pixelsPerDip);
+            requiredWidth += formatted.WidthIncludingTrailingWhitespace + item.Padding.Left + item.Padding.Right;
         }
 
-        ApplyViewportLayout();
+        return requiredWidth;
+    }
+
+    private void UpdateResponsiveLayout(double availableWidth)
+    {
+        if (!double.IsFinite(availableWidth) || availableWidth <= 0)
+        {
+            return;
+        }
+
+        var requiredMenuWidth = CalculateTopMenuRequiredWidth();
+        var compactThreshold = requiredMenuWidth + (_isCompactTopMenu ? CompactTopMenuHysteresis : 0);
+        var useCompactMenu = availableWidth < compactThreshold;
+        if (useCompactMenu != _isCompactTopMenu)
+        {
+            _isCompactTopMenu = useCompactMenu;
+            if (useCompactMenu)
+            {
+                CompactMenu.Visibility = Visibility.Visible;
+                foreach (var item in _topLevelMenuItems)
+                {
+                    TopMenu.Items.Remove(item);
+                    CompactMenu.Items.Add(item);
+                }
+            }
+            else
+            {
+                CompactMenu.IsSubmenuOpen = false;
+                foreach (var item in _topLevelMenuItems)
+                {
+                    CompactMenu.Items.Remove(item);
+                    TopMenu.Items.Add(item);
+                }
+
+                CompactMenu.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        var narrow = availableWidth < 240;
+        TimerBadge.Margin = new Thickness(narrow ? 6 : 14);
+        TimerBadge.Padding = narrow ? new Thickness(8, 5, 8, 5) : new Thickness(18, 9, 18, 9);
+        TimerBadge.MaxWidth = Math.Max(1, availableWidth - TimerBadge.Margin.Left - TimerBadge.Margin.Right);
+        TimerText.FontSize = narrow ? 18 : 24;
+        VideoFrameBadge.Margin = new Thickness(narrow ? 6 : 14);
+        VideoFrameBadge.Padding = narrow ? new Thickness(6, 5, 6, 5) : new Thickness(12, 7, 12, 7);
+        VideoFrameBadge.MaxWidth = Math.Max(1, availableWidth - VideoFrameBadge.Margin.Left - VideoFrameBadge.Margin.Right);
+        VideoFrameText.FontSize = narrow ? 11 : 13;
+        ColorCountBadge.Margin = new Thickness(narrow ? 6 : 12);
+        ColorCountBadge.Padding = narrow ? new Thickness(6, 5, 6, 5) : new Thickness(12, 7, 12, 7);
+        ColorCountBadge.MaxWidth = Math.Max(1, availableWidth - ColorCountBadge.Margin.Left - ColorCountBadge.Margin.Right);
+        ColorCountText.FontSize = narrow ? 11 : 13;
+        Toast.Margin = narrow ? new Thickness(6, 0, 6, 12) : new Thickness(0, 0, 0, 24);
+        Toast.Padding = narrow ? new Thickness(8, 6, 8, 6) : new Thickness(16, 9, 16, 9);
+        Toast.MaxWidth = Math.Max(1, availableWidth - 24);
+        CountdownText.FontSize = Math.Clamp(availableWidth * 0.6, 48, 180);
+        var emptyTextSize = Math.Clamp(availableWidth / 8, 14, 22);
+        PhotoEmptyText.FontSize = emptyTextSize;
+        ColorPhotoEmptyText.FontSize = emptyTextSize;
+        VideoFrameEmptyText.FontSize = emptyTextSize;
+    }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        KeepWindowWithinWorkArea(GetCurrentWorkAreaInDips());
+
+        UpdateResponsiveLayout(RootSurface.ActualWidth);
+        EnsureImageViewportsFillRootSurface();
+        QueueWindowAspectCorrection(AspectRatioDriver.Nearest);
         QueueSourceSelectionIfNeeded();
     }
 
     private void RootSurface_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        ApplyViewportLayout();
+        UpdateResponsiveLayout(e.NewSize.Width);
+        QueueViewportRefresh();
     }
 
     private void QueueSourceSelectionIfNeeded()
@@ -1041,10 +1700,22 @@ public partial class MainWindow : Window, IViewportController
             return;
         }
 
+        var openVersion = ++_videoSourceOpenVersion;
+        _videoSourceOpenCts.Cancel();
+        _videoSourceOpenCts.Dispose();
+        _videoSourceOpenCts = new CancellationTokenSource();
+        var openToken = _videoSourceOpenCts.Token;
+        _videoSourceOpenActive = true;
         try
         {
             CancelVideoFrameLoad();
-            var info = await _videoFrameCache.OpenAsync(_videoTools, sourcePath);
+            ClearVideoFrameDisplay(T("Loading video...", "正在载入视频..."));
+            var info = await _videoFrameCache.OpenAsync(_videoTools, sourcePath, openToken);
+            if (openToken.IsCancellationRequested || openVersion != _videoSourceOpenVersion)
+            {
+                return;
+            }
+
             var modeState = _state.GetModeState(AppMode.VideoFrames);
             modeState.ImageRootPath = sourcePath;
             _autoPromptedSourceModes.Remove(AppMode.VideoFrames);
@@ -1070,13 +1741,25 @@ public partial class MainWindow : Window, IViewportController
                 RequestVideoFrameDisplay();
             }
         }
+        catch (OperationCanceledException) when (openToken.IsCancellationRequested || openVersion != _videoSourceOpenVersion)
+        {
+            // A newer video source request won.
+        }
         catch (Exception ex)
         {
-            ShowToast(T("Cannot open video: ", "无法打开视频：") + ex.Message);
+            if (openVersion == _videoSourceOpenVersion)
+            {
+                ClearVideoFrameDisplay(T("Cannot open video", "无法打开视频"));
+                ShowToast(T("Cannot open video: ", "无法打开视频：") + ex.Message);
+            }
         }
         finally
         {
-            UpdateAllUi();
+            if (openVersion == _videoSourceOpenVersion)
+            {
+                _videoSourceOpenActive = false;
+                UpdateAllUi();
+            }
         }
     }
 
@@ -1157,12 +1840,9 @@ public partial class MainWindow : Window, IViewportController
         var video = _videoFrameCache.CurrentVideo;
         if (video is null)
         {
-            ActiveImage.Source = null;
-            VideoFrameEmptyText.Visibility = Visibility.Visible;
-            VideoFrameBadge.Visibility = Visibility.Collapsed;
-            ClearSampledImageColors();
-            _displayedVideoFrameIndex = -1;
-            _loadingVideoFrameIndex = -1;
+            ClearVideoFrameDisplay(_videoSourceOpenActive
+                ? T("Loading video...", "正在载入视频...")
+                : null);
             return -1;
         }
 
@@ -1217,6 +1897,7 @@ public partial class MainWindow : Window, IViewportController
         }
         catch (Exception ex)
         {
+            ClearVideoFrameDisplay(T("Cannot load frame", "无法载入帧"));
             ShowToast(T("Cannot load frame: ", "无法载入帧：") + ex.Message);
             return false;
         }
@@ -1226,6 +1907,22 @@ public partial class MainWindow : Window, IViewportController
             {
                 _loadingVideoFrameIndex = -1;
             }
+        }
+    }
+
+    private void ClearVideoFrameDisplay(string? emptyMessage = null)
+    {
+        _sourceBitmapByMode.Remove(AppMode.VideoFrames);
+        _displayBitmapByMode.Remove(AppMode.VideoFrames);
+        _displayedVideoFrameIndex = -1;
+        _loadingVideoFrameIndex = -1;
+        if (IsVideoFrameMode)
+        {
+            ActiveImage.Source = null;
+            VideoFrameEmptyText.Text = emptyMessage ?? T("Import a video to begin", "请导入视频开始");
+            VideoFrameEmptyText.Visibility = Visibility.Visible;
+            VideoFrameBadge.Visibility = Visibility.Collapsed;
+            ClearSampledImageColors();
         }
     }
 
@@ -1277,7 +1974,9 @@ public partial class MainWindow : Window, IViewportController
         var entry = ActiveEntry;
         if (entry is null)
         {
-            ActiveImage.Source = null;
+            ClearCurrentImageDisplay();
+            PhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
+            ColorPhotoEmptyText.Text = T("Set an image folder to begin", "请选择图片文件夹开始");
             PhotoEmptyText.Visibility = _state.AppMode == AppMode.PhotoSwitching ? Visibility.Visible : Visibility.Collapsed;
             ColorPhotoEmptyText.Visibility = _state.AppMode == AppMode.ColorPhoto ? Visibility.Visible : Visibility.Collapsed;
             return;
@@ -1299,8 +1998,28 @@ public partial class MainWindow : Window, IViewportController
         }
         catch
         {
-            ShowToast("Cannot open image");
+            ClearCurrentImageDisplay();
+            if (_state.AppMode == AppMode.PhotoSwitching)
+            {
+                PhotoEmptyText.Text = T("Cannot open image", "无法打开图片");
+                PhotoEmptyText.Visibility = Visibility.Visible;
+            }
+            else if (_state.AppMode == AppMode.ColorPhoto)
+            {
+                ColorPhotoEmptyText.Text = T("Cannot open image", "无法打开图片");
+                ColorPhotoEmptyText.Visibility = Visibility.Visible;
+            }
+
+            ShowToast(T("Cannot open image", "无法打开图片"));
         }
+    }
+
+    private void ClearCurrentImageDisplay()
+    {
+        _sourceBitmapByMode.Remove(_state.AppMode);
+        _displayBitmapByMode.Remove(_state.AppMode);
+        ActiveImage.Source = null;
+        ClearSampledImageColors();
     }
 
     private void ApplyImageEffects()
@@ -1811,12 +2530,16 @@ public partial class MainWindow : Window, IViewportController
         TopMenu.Visibility = _state.StayOnTop ? Visibility.Collapsed : Visibility.Visible;
         ApplyMenuTheme();
         UpdateTimerText();
-        ApplyViewportLayout();
+        EnsureImageViewportsFillRootSurface();
+        QueueWindowAspectCorrection(AspectRatioDriver.Width);
     }
 
     private void ApplyLanguage()
     {
         Title = T("Just Draw!", "Just Draw!");
+        var compactMenuHeader = T("Menu", "菜单");
+        CompactMenu.Header = compactMenuHeader;
+        System.Windows.Automation.AutomationProperties.SetName(CompactMenu, compactMenuHeader);
         FileMenu.Header = T("File", "文件");
         SetImageFolderItem.Header = T("Set Image Folder...", "选择图片文件夹...");
         RecentPathsMenu.Header = IsVideoFrameMode ? T("Recent Videos", "最近视频") : T("Recent Paths", "最近路径");
@@ -1856,7 +2579,7 @@ public partial class MainWindow : Window, IViewportController
         MosaicSizeItem.Header = T(
             $"Mosaic Size: {FormatMosaicSize(_state.MosaicDownsampleFactor)}...",
             $"马赛克尺寸：{FormatMosaicSize(_state.MosaicDownsampleFactor)}...");
-        ViewportMenu.Header = T("Viewport", "视口");
+        ViewportMenu.Header = T("Window Ratio", "窗口比例");
         SettingsMenu.Header = _updateAvailable
             ? T("Settings *", "设置 *")
             : T("Settings", "设置");
@@ -1871,10 +2594,14 @@ public partial class MainWindow : Window, IViewportController
             $"Video Frame Buffer: {_state.VideoFrameBufferSeconds}s...",
             $"视频逐帧缓冲：{_state.VideoFrameBufferSeconds} 秒...");
         ThemeAccentItem.Header = T("Theme Accent...", "主题色...");
-        LockAspectItem.Header = T(
-            $"Lock Viewport Aspect Ratio ({FormatViewportAspectRatio(_state.ImageViewportAspectRatio)})",
-            $"锁定视口比例（{FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}）");
-        ViewportAspectRatioItem.Header = T("Custom Ratio...", "自定义比例...");
+        var lockAspectHeader = _state.LockImageViewportAspectRatio
+            ? T(
+                $"Unlock Window Aspect Ratio ({FormatViewportAspectRatio(_state.ImageViewportAspectRatio)})",
+                $"解锁窗口比例（{FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}）")
+            : T("Lock Current Window Aspect Ratio", "锁定当前窗口比例");
+        LockAspectItem.Header = lockAspectHeader;
+        System.Windows.Automation.AutomationProperties.SetName(LockAspectItem, lockAspectHeader);
+        ViewportAspectRatioItem.Header = T("Custom Window Ratio...", "自定义窗口比例...");
         GrayscaleItem.Header = T("Grayscale Display", "灰度显示");
         SampleImageColorsItem.Header = T("Sample 30 Image Colors", "采样 30 个图片颜色");
         OpenSourceNoticeItem.Header = T(
@@ -1892,6 +2619,7 @@ public partial class MainWindow : Window, IViewportController
         VideoFrameEmptyText.Text = T("Import a video to begin", "请导入视频开始");
         ColorCountText.Text = T("Colors: ", "颜色数：") + Math.Max(1, _palette.Count);
         UpdateVideoFrameText();
+        UpdateResponsiveLayout(RootSurface.ActualWidth);
     }
 
     private void UpdateTimerText()
@@ -2784,16 +3512,16 @@ public partial class MainWindow : Window, IViewportController
 
         ViewportController.SetViewportAspectRatio(width, height);
         var label = FormatViewportAspectRatio(_state.ImageViewportAspectRatio);
-        ShowToast(T($"Image viewport locked to {label}", $"图片视口已锁定为 {label}"));
+        ShowToast(T($"Window ratio locked to {label}", $"窗口比例已锁定为 {label}"));
     }
 
     private void ViewportAspectRatio_Click(object sender, RoutedEventArgs e)
     {
         var input = Microsoft.VisualBasic.Interaction.InputBox(
             T(
-                "Enter a viewport ratio such as 16:9, 4:3, 1:1, or 1.85. Applying it also enables the aspect-ratio lock.",
-                "请输入视口宽高比，例如 16:9、4:3、1:1 或 1.85。应用后会同时启用比例锁定。"),
-            T("Image Viewport Aspect Ratio", "图片视口比例"),
+                "Enter a window ratio such as 16:9, 4:3, 1:1, or 1.85. Applying it also enables the aspect-ratio lock.",
+                "请输入窗口宽高比，例如 16:9、4:3、1:1 或 1.85。应用后会同时启用比例锁定。"),
+            T("Window Aspect Ratio", "窗口比例"),
             FormatViewportAspectRatio(_state.ImageViewportAspectRatio));
         if (string.IsNullOrWhiteSpace(input))
         {
@@ -2804,8 +3532,8 @@ public partial class MainWindow : Window, IViewportController
         {
             System.Windows.MessageBox.Show(
                 this,
-                T("Enter a valid positive ratio between 1:100 and 100:1.", "请输入 1:100 到 100:1 之间的有效正数比例。"),
-                T("Invalid Viewport Ratio", "视口比例无效"),
+                T("Enter a valid positive ratio between 1:4 and 4:1.", "请输入 1:4 到 4:1 之间的有效正数比例。"),
+                T("Invalid Window Ratio", "窗口比例无效"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
@@ -2813,7 +3541,7 @@ public partial class MainWindow : Window, IViewportController
 
         ViewportController.SetViewportAspectRatio(width, height);
         var label = FormatViewportAspectRatio(_state.ImageViewportAspectRatio);
-        ShowToast(T($"Image viewport locked to {label}", $"图片视口已锁定为 {label}"));
+        ShowToast(T($"Window ratio locked to {label}", $"窗口比例已锁定为 {label}"));
     }
 
     private void LockAspect_Click(object sender, RoutedEventArgs e)
@@ -2821,8 +3549,8 @@ public partial class MainWindow : Window, IViewportController
         var enabled = !_state.LockImageViewportAspectRatio;
         ViewportController.SetViewportAspectRatioLock(enabled);
         ShowToast(enabled
-            ? T($"Image viewport locked to {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}", $"图片视口已锁定为 {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}")
-            : T("Image viewport aspect ratio unlocked", "图片视口比例已解锁"));
+            ? T($"Window ratio locked to {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}", $"窗口比例已锁定为 {FormatViewportAspectRatio(_state.ImageViewportAspectRatio)}")
+            : T("Window aspect ratio unlocked", "窗口比例已解锁"));
     }
 
     private void Grayscale_Click(object sender, RoutedEventArgs e)
@@ -3267,24 +3995,47 @@ public partial class MainWindow : Window, IViewportController
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (WindowState == WindowState.Normal)
+        if (WindowState == WindowState.Normal && !_isApplyingWindowAspectRatio)
         {
-            _state.WindowWidth = Math.Max(360, (int)Math.Round(Width));
-            _state.WindowHeight = Math.Max(360, (int)Math.Round(Height));
+            var currentSize = GetCurrentWindowSizeInDips();
+            _state.WindowWidth = Math.Max((int)Math.Ceiling(MinWidth), (int)Math.Round(currentSize.Width));
+            _state.WindowHeight = Math.Max((int)Math.Ceiling(MinHeight), (int)Math.Round(currentSize.Height));
         }
 
-        ApplyViewportLayout();
+        QueueViewportRefresh();
+        if (_state.LockImageViewportAspectRatio && !_isApplyingWindowAspectRatio)
+        {
+            var driver = e.WidthChanged && !e.HeightChanged
+                ? AspectRatioDriver.Width
+                : e.HeightChanged && !e.WidthChanged
+                    ? AspectRatioDriver.Height
+                    : Math.Abs(e.NewSize.Width - e.PreviousSize.Width) >= Math.Abs(e.NewSize.Height - e.PreviousSize.Height)
+                        ? AspectRatioDriver.Width
+                        : AspectRatioDriver.Height;
+            QueueWindowAspectCorrection(driver);
+        }
+    }
+
+    private void Window_LocationChanged(object? sender, EventArgs e)
+    {
+        if (_state.LockImageViewportAspectRatio && !_isClosing)
+        {
+            UpdateWindowMinimumsForAspectRatio();
+        }
     }
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         _isClosing = true;
+        _videoSourceOpenVersion++;
+        _videoSourceOpenCts.Cancel();
         CancelVideoFrameLoad();
         SaveCurrentImageViewState();
         if (WindowState == WindowState.Normal)
         {
-            _state.WindowWidth = Math.Max(360, (int)Math.Round(Width));
-            _state.WindowHeight = Math.Max(360, (int)Math.Round(Height));
+            var currentSize = GetCurrentWindowSizeInDips();
+            _state.WindowWidth = Math.Max((int)Math.Ceiling(MinWidth), (int)Math.Round(currentSize.Width));
+            _state.WindowHeight = Math.Max((int)Math.Ceiling(MinHeight), (int)Math.Round(currentSize.Height));
         }
 
         foreach (var pair in _entriesByMode)
@@ -3307,8 +4058,39 @@ public partial class MainWindow : Window, IViewportController
         }
 
         StateStore.Save(_state);
+        _videoSourceOpenCts.Dispose();
         _videoFrameLoadCts.Dispose();
         _videoFrameCache.Dispose();
         _imageLibrary.Dispose();
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMinMaxInfo
+    {
+        public NativePoint Reserved;
+        public NativePoint MaxSize;
+        public NativePoint MaxPosition;
+        public NativePoint MinTrackSize;
+        public NativePoint MaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rect);
 }
